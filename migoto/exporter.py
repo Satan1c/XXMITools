@@ -181,7 +181,7 @@ class ModExporter:
             comp_matching_objs: list[Object] = [
                 obj for obj in candidate_objs if obj.name.startswith(current_name)
             ]
-            if len(comp_matching_objs) == 0:
+            if len(comp_matching_objs) == 0 and component["draw_vb"] != "":
                 continue
             for j, part in enumerate(component["object_classifications"]):
                 part_name: str = current_name + part
@@ -304,6 +304,15 @@ class ModExporter:
         self.files_to_write = {}
         self.files_to_copy = {}
         for component in self.mod_file.components:
+            if component.draw_vb == "":
+                for part in component.parts:
+                    print(f"Processing {part.fullname} " + "-" * 10)
+                    for t in part.textures:
+                        tex_name = part.fullname + t.name + t.extension
+                        self.files_to_copy[self.dump_path / tex_name] = (
+                            self.destination / tex_name
+                        )
+                continue
             data_model: DataModelXXMI = DataModelXXMI.from_obj(
                 component.parts[0].objects[0].obj,
                 game=self.game,
