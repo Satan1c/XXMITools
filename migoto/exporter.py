@@ -48,6 +48,8 @@ class TextureData:
 @dataclass
 class Part:
     fullname: str
+    name: str
+    classification: str
     objects: list[SubObj]
     textures: list[TextureData]
     first_index: int
@@ -58,6 +60,7 @@ class Part:
 @dataclass
 class Component:
     fullname: str
+    name: str
     parts: list[Part]
     root_vs: str
     draw_vb: str
@@ -169,6 +172,7 @@ class ModExporter:
             current_name: str = f"{self.mod_name}{component['component_name']}"
             component_entry: Component = Component(
                 fullname=current_name,
+                name=component['component_name'],
                 parts=[],
                 root_vs=component.get("root_vs", ""),
                 draw_vb=component.get("draw_vb", ""),
@@ -233,6 +237,8 @@ class ModExporter:
                 component_entry.parts.append(
                     Part(
                         fullname=part_name,
+                        name=current_name,
+                        classification=part,
                         objects=objects,
                         textures=textures,
                         first_index=component["object_indexes"][j],
