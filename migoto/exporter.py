@@ -247,7 +247,7 @@ class ModExporter:
                 component_entry.parts.append(
                     Part(
                         fullname=part_name,
-                        name=current_name,
+                        name=part,
                         objects=objects,
                         textures=textures,
                         first_index=component["object_indexes"][j],
