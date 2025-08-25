@@ -47,20 +47,19 @@ class TextureData:
 
 @dataclass
 class Part:
-    fullname: str
     name: str
-    classification: str
+    fullname: str
     objects: list[SubObj]
     textures: list[TextureData]
     first_index: int
-    index_count: int = 0
     vertex_count: int = 0
+    index_count: int = 0
 
 
 @dataclass
 class Component:
-    fullname: str
     name: str
+    fullname: str
     parts: list[Part]
     root_vs: str
     draw_vb: str
@@ -171,8 +170,8 @@ class ModExporter:
         for component in self.hash_data:
             current_name: str = f"{self.mod_name}{component['component_name']}"
             component_entry: Component = Component(
-                fullname=current_name,
                 name=component['component_name'],
+                fullname=current_name,
                 parts=[],
                 root_vs=component.get("root_vs", ""),
                 draw_vb=component.get("draw_vb", ""),
@@ -234,15 +233,25 @@ class ModExporter:
                         self.obj_from_col(obj, None, objects)
                     else:
                         self.obj_from_col(obj, collection[0], objects)
+                index_count: int = 0
+                if len(objects) > 0:
+                    index_count = objects[0].obj.get("3DMigoto:IndexCount", 0)
+                else:
+                    try:
+                        index_count = component["object_index_counts"][j] if "object_index_counts" in component else 0
+                    except IndexError:
+                        self.operator.report(
+                            {"WARNING"},
+                            f"Index count for part {part_name} not found in hash.json. Defaulting to 0.",
+                        )
                 component_entry.parts.append(
                     Part(
                         fullname=part_name,
                         name=current_name,
-                        classification=part,
                         objects=objects,
                         textures=textures,
                         first_index=component["object_indexes"][j],
-                        index_count=component["object_index_counts"][j] if "object_index_counts" in component and component["object_index_counts"][j] > 0 else (objects[0].obj.get("3DMigoto:IndexCount", 0) if len(objects) > 0 else 0),
+                        index_count=index_count,
                     )
                 )
             self.mod_file.components.append(component_entry)
