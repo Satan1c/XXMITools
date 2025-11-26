@@ -166,7 +166,7 @@
 
 {% block resourcetextures %}
     {% for component in mod_file.components %}
-        {% for part in component.parts %}
+        {% for part in component.parts if (component.draw_vb != "" and part.vertex_count > 0) or (component.draw_vb == "" and component.position_vb == "") %}
             {% for texture in part.textures %}
                 [Resource{{ part.fullname }}{{ texture.name }}]
                 filename = {{ part.fullname }}{{ texture.name }}{{ texture.extension }}
