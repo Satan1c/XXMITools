@@ -353,11 +353,12 @@ class ModExporter:
                     layout=data_model.buffers_format["IB"]
                 )
                 ib_offset: int = 0
-                for t in part.textures:
-                    tex_name = part.fullname + t.name + t.extension
-                    self.files_to_copy[self.dump_path / tex_name] = (
-                        self.destination / tex_name
-                    )
+                if (component.draw_vb != "" and part.vertex_count > 0) or (component.draw_vb == "" and component.position_vb == ""):
+                    for t in part.textures:
+                        tex_name = part.fullname + t.name + t.extension
+                        self.files_to_copy[self.dump_path / tex_name] = (
+                            self.destination / tex_name
+                        )
                 if component.draw_vb == "":
                     continue
                 for entry in part.objects:
@@ -403,20 +404,21 @@ class ModExporter:
             if self.outline_optimization:
                 self.optimize_outlines(out_buffers, component_ib)
             if component.blend_vb != "":
-                self.files_to_write[
-                    self.destination / (component.fullname + "Position.buf")
-                ] = out_buffers["Position"].data
-                self.files_to_write[
-                    self.destination / (component.fullname + "Blend.buf")
-                ] = out_buffers["Blend"].data
-                self.files_to_write[
-                    self.destination / (component.fullname + "Texcoord.buf")
-                ] = out_buffers["TexCoord"].data
-                component.strides = {
-                    k.lower(): v.stride
-                    for k, v in data_model.buffers_format.items()
-                    if k != "IB"
-                }
+                if any([part.vertex_count for part in component.parts]):
+                    self.files_to_write[
+                        self.destination / (component.fullname + "Position.buf")
+                    ] = out_buffers["Position"].data
+                    self.files_to_write[
+                        self.destination / (component.fullname + "Blend.buf")
+                    ] = out_buffers["Blend"].data
+                    self.files_to_write[
+                        self.destination / (component.fullname + "Texcoord.buf")
+                    ] = out_buffers["TexCoord"].data
+                    component.strides = {
+                        k.lower(): v.stride
+                        for k, v in data_model.buffers_format.items()
+                        if k != "IB"
+                    }
                 continue
             self.files_to_write[self.destination / (component.fullname + ".buf")] = (
                 out_buffers["Position"].data
