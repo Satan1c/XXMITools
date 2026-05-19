@@ -290,8 +290,8 @@ class VGROUP_SN_merge(bpy.types.Operator):
                         for v in relevant:
                             if ob.vertex_groups[v].index in available_groups:
                                 combined += ob.vertex_groups[v].weight(vert_id)
-                                if combined > 0:
-                                    vgroup.add([vert_id], combined, "ADD")
+                        if combined > 0:
+                            vgroup.add([vert_id], combined, "ADD")
                     for vg in [
                         x
                         for x in ob.vertex_groups
@@ -353,8 +353,8 @@ class VGROUP_SN_merge_ONE(bpy.types.Operator):
                     for v in relevant:
                         if ob.vertex_groups[v].index in available_groups:
                             combined += ob.vertex_groups[v].weight(vert_id)
-                            if combined > 0:
-                                vgroup.add([vert_id], combined, "ADD")
+                    if combined > 0:
+                        vgroup.add([vert_id], combined, "ADD")
                 for vg in [
                     x for x in ob.vertex_groups if x.name.split(".")[0] == f"{vname}"
                 ]:
