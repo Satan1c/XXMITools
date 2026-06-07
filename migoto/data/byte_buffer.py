@@ -1,15 +1,69 @@
 import copy
+import io
+import re
 import textwrap
-from pathlib import Path
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, fields
 from enum import Enum
-from typing import Callable, Optional, Union
-
+from operator import attrgetter
+from pathlib import Path
 
 import numpy
-from numpy.typing import DTypeLike, NDArray
 
 from .dxgi_format import DXGIFormat
+
+
+class Topology(str, Enum):
+    Undefined = "undefined"
+    PointList = "pointlist"
+    LineList = "linelist"
+    LineStrip = "linestrip"
+    TriangleList = "trianglelist"
+    TriangleStrip = "trianglestrip"
+    LineListAdj = "linelist_adj"
+    LineStripAdj = "linestrip_adj"
+    TriangleListAdj = "trianglelist_adj"
+    TriangleStripAdj = "trianglestrip_adj"
+
+    # Patchlists
+    ControlPointPatchList1 = "1_control_point_patchlist"
+    ControlPointPatchList2 = "2_control_point_patchlist"
+    ControlPointPatchList3 = "3_control_point_patchlist"
+    ControlPointPatchList4 = "4_control_point_patchlist"
+    ControlPointPatchList5 = "5_control_point_patchlist"
+    ControlPointPatchList6 = "6_control_point_patchlist"
+    ControlPointPatchList7 = "7_control_point_patchlist"
+    ControlPointPatchList8 = "8_control_point_patchlist"
+    ControlPointPatchList9 = "9_control_point_patchlist"
+    ControlPointPatchList10 = "10_control_point_patchlist"
+    ControlPointPatchList11 = "11_control_point_patchlist"
+    ControlPointPatchList12 = "12_control_point_patchlist"
+    ControlPointPatchList13 = "13_control_point_patchlist"
+    ControlPointPatchList14 = "14_control_point_patchlist"
+    ControlPointPatchList15 = "15_control_point_patchlist"
+    ControlPointPatchList16 = "16_control_point_patchlist"
+    ControlPointPatchList17 = "17_control_point_patchlist"
+    ControlPointPatchList18 = "18_control_point_patchlist"
+    ControlPointPatchList19 = "19_control_point_patchlist"
+    ControlPointPatchList20 = "20_control_point_patchlist"
+    ControlPointPatchList21 = "21_control_point_patchlist"
+    ControlPointPatchList22 = "22_control_point_patchlist"
+    ControlPointPatchList23 = "23_control_point_patchlist"
+    ControlPointPatchList24 = "24_control_point_patchlist"
+    ControlPointPatchList25 = "25_control_point_patchlist"
+    ControlPointPatchList26 = "26_control_point_patchlist"
+    ControlPointPatchList27 = "27_control_point_patchlist"
+    ControlPointPatchList28 = "28_control_point_patchlist"
+    ControlPointPatchList29 = "29_control_point_patchlist"
+    ControlPointPatchList30 = "30_control_point_patchlist"
+    ControlPointPatchList31 = "31_control_point_patchlist"
+    ControlPointPatchList32 = "32_control_point_patchlist"
+
+    def __str__(self):
+        return f"{self.value}"
+
+    def __repr__(self):
+        return f"{self.value}"
 
 
 class Semantic(str, Enum):
@@ -23,14 +77,38 @@ class Semantic(str, Enum):
     Position = "POSITION"
     Blendindices = "BLENDINDICES"
     Blendweight = "BLENDWEIGHT"
+    Blendweights = "BLENDWEIGHTS"
     ShapeKey = "SHAPEKEY"
-    Binormal = "BINORMAL"
     RawData = "RAWDATA"
+    EncodedData = "ENCODEDDATA"
+    Attribute = "ATTRIBUTE"
 
-    def __str__(self) -> str:
+    def __str__(self):
         return f"{self.value}"
 
-    def __repr__(self) -> str:
+    def __repr__(self):
+        return f"{self.value}"
+
+    def __eq__(self, other):
+        ALIASES = {"BLENDWEIGHT": "BLENDWEIGHTS"}
+        if isinstance(other, str):
+            return self.value == other or ALIASES.get(self.value) == other
+        if isinstance(other, Semantic):
+            return self.value == other.value or ALIASES.get(self.value) == other.value
+        return super().__eq__(other)
+
+    def __hash__(self):
+        return hash(self.value)
+
+
+class InputSlotClass(str, Enum):
+    PerVertex = "per-vertex"
+    PerInstance = "per-instance"
+
+    def __str__(self):
+        return f"{self.value}"
+
+    def __repr__(self):
         return f"{self.value}"
 
 
@@ -39,20 +117,16 @@ class AbstractSemantic:
     enum: Semantic
     index: int = 0
 
-    def __init__(self, semantic, semantic_index=0) -> None:
-        self.enum = semantic
-        self.index = semantic_index
-
-    def __hash__(self) -> int:
+    def __hash__(self):
         return hash((self.enum, self.index))
 
-    def __str__(self) -> str:
+    def __str__(self):
         return f"{self.enum}_{self.index}"
 
-    def __repr__(self) -> str:
+    def __repr__(self):
         return f"{self.enum}_{self.index}"
 
-    def get_name(self) -> str:
+    def get_name(self):
         name = self.enum.value
         if self.index > 0:
             name += str(self.index)
@@ -67,24 +141,34 @@ class BufferSemantic:
     format: DXGIFormat
     stride: int = 0
     offset: int = 0
+    name: str | None = None
     input_slot: int = 0
-    data_step_rate: int = 0
-    extract_format: Optional[DXGIFormat] = None
-    name: Optional[str] = None
-    remapped_abstract: Optional[AbstractSemantic] = None
+    input_slot_class: InputSlotClass = InputSlotClass.PerVertex
+    instance_data_step_rate: int = 0
+    import_format: DXGIFormat | None = None
+    extract_format: DXGIFormat | None = None
+    remapped_abstract: AbstractSemantic | None = None
 
-    def __post_init__(self) -> None:
+    def __post_init__(self):
         # Calculate byte stride
         if self.stride == 0:
             self.stride = self.format.byte_width
 
-    def __hash__(self) -> int:
-        return hash((self.abstract, self.format.format, self.stride, self.offset))
+    def __hash__(self):
+        return hash(
+            (
+                self.abstract,
+                self.input_slot,
+                self.format.format,
+                self.stride,
+                self.offset,
+            )
+        )
 
-    def __repr__(self) -> str:
-        return f"{self.abstract} ({self.format.format} stride={self.stride} offset={self.offset})"
+    def __repr__(self):
+        return f"{self.abstract} ({self.format.format} input={self.input_slot} stride={self.stride} offset={self.offset})"
 
-    def to_string(self, indent=2) -> str:
+    def to_string(self, indent=2):
         return textwrap.indent(
             textwrap.dedent(f"""
             SemanticName: {self.abstract.enum}
@@ -92,8 +176,8 @@ class BufferSemantic:
             Format: {self.format.format}
             InputSlot: {self.input_slot}
             AlignedByteOffset: {self.offset}
-            InputSlotClass: per-vertex
-            InstanceDataStepRate: {self.data_step_rate}
+            InputSlotClass: {self.input_slot_class}
+            InstanceDataStepRate: {self.instance_data_step_rate}
         """).lstrip(),
             " " * indent,
         )
@@ -102,13 +186,26 @@ class BufferSemantic:
         return self.format.get_format()
 
     def get_name(self) -> str:
-        return self.name if self.name else self.abstract.get_name()
+        return self.name or self.abstract.get_name()
 
     def get_num_values(self) -> int:
         return self.format.get_num_values(self.stride)
 
-    def get_numpy_type(self) -> DTypeLike:
+    def get_numpy_type(
+        self,
+    ) -> int | tuple[numpy.integer | numpy.floating, int]:
         return self.format.get_numpy_type(self.stride)
+
+    def to_dict(self) -> dict:
+        return {
+            "SemanticName": self.abstract.enum.value,
+            "SemanticIndex": self.abstract.index,
+            "Format": self.format.format,
+            "InputSlot": self.input_slot,
+            "AlignedByteOffset": self.offset,
+            "InputSlotClass": self.input_slot_class.value,
+            "InstanceDataStepRate": self.instance_data_step_rate,
+        }
 
 
 @dataclass
@@ -116,18 +213,15 @@ class BufferLayout:
     semantics: list[BufferSemantic]
     stride: int = 0
     force_stride: bool = False
+    auto_stride: bool = True
+    auto_offsets: bool = True
 
-    def __post_init__(self) -> None:
+    def __post_init__(self):
         # Autofill byte Stride and Offsets
-        if self.stride == 0:
-            # Calculate byte stride
-            for element in self.semantics:
-                self.stride += element.stride
-            # Calculate byte offsets
-            offset = 0
-            for element in self.semantics:
-                element.offset = offset
-                offset += element.stride
+        if self.auto_stride and self.stride == 0:
+            self.fill_stride()
+            if self.auto_offsets:
+                self.fill_offsets()
         # Autofill Semantic Index
         groups = {}
         for semantic in self.semantics:
@@ -138,35 +232,87 @@ class BufferLayout:
                 groups[semantic] += 1
                 semantic.abstract.index = groups[semantic]
 
-    def get_element(self, abstract: AbstractSemantic) -> Optional[BufferSemantic]:
-        """Returns the first element with the same semantic name and index"""
+    def fill_stride(self):
+        self.stride = self.calculate_stride()
+
+    def calculate_stride(self):
+        stride = 0
         for element in self.semantics:
-            if abstract == element.abstract:
-                return element
+            stride += element.stride
+        return stride
+
+    def fill_offsets(self):
+        offset = 0
+        for element in self.semantics:
+            element.offset = offset
+            offset += element.stride
+
+    def get_element(
+        self, element: AbstractSemantic | Semantic | int
+    ) -> BufferSemantic | None:
+        if isinstance(element, str):
+            for layout_element in self.semantics:
+                if element == layout_element.get_name():
+                    return layout_element
+            # raise ValueError(f'Layout element with name {element} is not found!')
+            return None
+
+        if isinstance(element, int):
+            if element >= len(self.semantics):
+                # raise ValueError(f'Layout element with id {element} is out of 0-{len(self.semantics)} bounds!')
+                return None
+            return self.semantics[element]
+
+        if isinstance(element, Semantic):
+            element = AbstractSemantic(element)
+
+        if not isinstance(element, AbstractSemantic):
+            raise ValueError(
+                f"Layout element search by type {type(element)} of value {element} is not supported!"
+            )
+
+        for layout_element in self.semantics:
+            if element == layout_element.abstract:
+                return layout_element
+
         return None
 
-    def add_element(self, semantic: BufferSemantic) -> None:
-        """Adds a new element to the layout"""
+    def set_element(self, abstract: AbstractSemantic, semantic: BufferSemantic):
+        for i, element in enumerate(self.semantics):
+            if abstract == element.abstract:
+                self.stride -= element.stride
+                self.semantics[i] = semantic
+                self.stride += semantic.stride
+                if self.auto_stride:
+                    self.fill_stride()
+                    if self.auto_offsets:
+                        self.fill_offsets()
+                return
+        raise ValueError(f"Buffer semantic {abstract} not found in layout!")
+
+    def add_element(self, semantic: BufferSemantic):
         if self.get_element(semantic.abstract) is not None:
             return
         semantic = copy.deepcopy(semantic)
-        semantic.offset = self.stride
+        if self.auto_offsets:
+            semantic.offset = self.stride
+        if self.auto_stride:
+            self.stride += semantic.stride
         self.semantics.append(semantic)
-        self.stride += semantic.stride
 
-    def merge(self, layout) -> None:
+    def merge(self, layout: "BufferLayout"):
         for semantic in layout.semantics:
-            if not self.get_element(semantic):
+            if not self.get_element(semantic.abstract):
                 self.add_element(semantic)
 
-    def to_string(self) -> str:
+    def to_string(self):
         ret = ""
         for i, semantic in enumerate(self.semantics):
             ret += "element[%i]:\n" % i
             ret += semantic.to_string()
         return ret
 
-    def get_numpy_type(self) -> DTypeLike:
+    def get_numpy_type(self):
         dtype = numpy.dtype([])
         for semantic in self.semantics:
             dtype = numpy.dtype(
@@ -175,42 +321,176 @@ class BufferLayout:
             )
         return dtype
 
+    def get_max_input_slot(self) -> int:
+        return max([semantic.input_slot for semantic in self.semantics])
+
+    def get_elements_in_slot(self, input_slot: int) -> list[BufferSemantic]:
+        return [
+            semantic for semantic in self.semantics if semantic.input_slot == input_slot
+        ]
+
+    def sort(self):
+        self.semantics.sort(key=attrgetter("input_slot", "offset"))
+
+    def remove_data_views(self):
+        filtered_semantics = []
+        for input_slot in range(self.get_max_input_slot() + 1):
+            semantics = self.get_elements_in_slot(input_slot)
+            offset = 0
+            slot_semantics = []
+            # prev_semantic = None
+            for semantic in semantics:
+                if semantic.offset < offset:
+                    # if prev_semantic and semantic.stride != prev_semantic.stride:
+                    #     raise ValueError(f'unexpected data view {semantic.abstract} stride {semantic.stride} (expected {prev_semantic.stride}) for semantic {semantic}')
+                    continue
+                slot_semantics.append(semantic)
+                # prev_semantic = semantic
+                offset += semantic.stride
+            filtered_semantics += slot_semantics
+        self.semantics = filtered_semantics
+
+    def serialise(self):
+        return [x.to_dict() for x in self.semantics]
+
+    def generate_remapped_layout(self, remap: dict[str, Semantic]) -> "BufferLayout":
+        """Apply semantic remap to the vb's Format returns a remapped format for importing purposes and
+        adds a remapped semantic reference to the original layout semantics for data retrieval during export
+        """
+        ELEM_COUNT = {
+            Semantic.Index: 1,
+            Semantic.VertexId: 1,
+            Semantic.BitangentSign: 1,
+            Semantic.TexCoord: 2,
+            Semantic.Normal: 3,
+            Semantic.Tangent: 3,
+            Semantic.ShapeKey: 3,
+            Semantic.Position: 3,
+            Semantic.Color: 4,
+            Semantic.RawData: 4,
+            Semantic.Attribute: 4,
+            Semantic.Blendweight: 4,
+            Semantic.EncodedData: 4,
+            Semantic.Blendindices: 4,
+            Semantic.Blendweights: 4,
+        }
+        # TODO: When semantic remap for export is implemnted we must revisit this order definition
+        # we might want to remap original name as the name of the destination or reassign indexes
+        # for now we reassign indexes to keep the remapped semantics grouped at the bottom
+        semantic_highest_index: dict[Semantic, int] = {}
+        for semantic in self.semantics:
+            if semantic.abstract.enum not in semantic_highest_index:
+                semantic_highest_index[semantic.abstract.enum] = 0
+            else:
+                semantic_highest_index[semantic.abstract.enum] += 1
+
+        def find_new_semantic_index(semantic_enum: Semantic) -> int:
+            if semantic_enum not in semantic_highest_index:
+                semantic_highest_index[semantic_enum] = 0
+            else:
+                semantic_highest_index[semantic_enum] += 1
+            return semantic_highest_index[semantic_enum]
+
+        generated_semantics: dict[BufferSemantic, list[BufferSemantic]] = {}
+        for source_name, destination_semantic in remap.items():
+            try:
+                groups = re.match(r"(.+)(\d+)?", source_name).groups()
+                old_semantic = Semantic(groups[0])
+                semantic_index = 0 if groups[1] is None else int(groups[1])
+            except Exception as e:
+                print(
+                    f"Failed to parse semantic remap key `{source_name}`: {e}.Skipping"
+                )
+                continue
+            for semantic in self.semantics:
+                if (
+                    semantic.abstract.enum == old_semantic
+                    and semantic.abstract.index == semantic_index
+                ):
+                    generated_semantics[semantic] = []
+                    source_dim = semantic.get_num_values()
+                    destination_dim = ELEM_COUNT[destination_semantic]
+
+                    new_semantic = Semantic(destination_semantic)
+                    new = BufferSemantic(
+                        abstract=AbstractSemantic(
+                            new_semantic, find_new_semantic_index(new_semantic)
+                        ),
+                        format=DXGIFormat.from_type(
+                            semantic.format.dxgi_type, min(destination_dim, source_dim)
+                        ),
+                    )
+                    generated_semantics[semantic].append(new)
+                    if source_dim > destination_dim:
+                        new_semantic = Semantic(destination_semantic)
+                        new = BufferSemantic(
+                            abstract=AbstractSemantic(
+                                new_semantic, find_new_semantic_index(new_semantic)
+                            ),
+                            format=DXGIFormat.from_type(
+                                semantic.format.dxgi_type, source_dim - destination_dim
+                            ),
+                        )
+                        generated_semantics[semantic].append(new)
+                    continue
+        semantics: list[BufferSemantic] = []
+        for semantic in self.semantics:
+            if generated_semantics.get(semantic) is None:
+                semantics.append(semantic)
+            else:
+                semantics += generated_semantics[semantic]
+        return BufferLayout(semantics)
+
 
 class NumpyBuffer:
     layout: BufferLayout
-    data: NDArray
+    data: numpy.ndarray | None = None
 
-    def __init__(
-        self, layout: BufferLayout, data: Optional[NDArray] = None, size=0
-    ) -> None:
+    def __init__(self, layout: BufferLayout, data: numpy.ndarray | None = None, size=0):
         self.set_layout(layout)
         self.set_data(data, size)
 
-    def set_layout(self, layout: BufferLayout) -> None:
+    def set_layout(self, layout: BufferLayout):
         self.layout = layout
 
-    def set_data(self, data: Optional[NDArray], size=0) -> None:
+    def set_data(self, data: numpy.ndarray | None, size=0):
         if data is not None:
             self.data = data
-        elif size >= 0:
+        else:
             self.data = numpy.zeros(size, dtype=self.layout.get_numpy_type())
 
-    def set_field(self, field: str, data: NDArray) -> None:
-        try:
-            self.data[field] = data
-        except ValueError as e:
-            raise ValueError(f"Failed to set field {field}: {e}")
+    def set_field(
+        self, field: AbstractSemantic | Semantic | int | str, data: numpy.ndarray | None
+    ):
+        semantic = self.layout.get_element(field)
+        if semantic is None:
+            raise ValueError(
+                f"Semantic {field} not found in the layout of NumpyBuffer!"
+            )
+        self.data[semantic.get_name()] = data
 
-    def get_data(self, indices: Optional[NDArray] = None) -> NDArray:
+    def get_data(self, indices: numpy.ndarray | None = None) -> numpy.ndarray:
         if indices is None:
             return self.data
-        else:
-            return self.data[indices]
+        return self.data[indices]
 
-    def get_field(self, field: str) -> NDArray:
-        return self.data[field]
+    def get_field(
+        self, field: AbstractSemantic | Semantic | int | str
+    ) -> numpy.ndarray | None:
+        semantic = self.layout.get_element(field)
+        if semantic is None:
+            return None
+        field_name = semantic.get_name()
+        if self.data is None:
+            return None
+        dtype_names = self.data.dtype.names
+        if dtype_names is None:
+            return None
+        if field_name in dtype_names:
+            return self.data[field_name]
+        return None
 
-    def remove_duplicates(self, keep_order=True) -> None:
+    def remove_duplicates(self, keep_order=True):
         if keep_order:
             _, unique_index = numpy.unique(self.data, return_index=True)
             self.data = self.data[numpy.sort(unique_index)]
@@ -219,11 +499,11 @@ class NumpyBuffer:
 
     def import_semantic_data(
         self,
-        data: NDArray,
-        semantic: Union[BufferSemantic, int],
-        semantic_converters: Optional[list[Callable]] = None,
-        format_converters: Optional[list[Callable]] = None,
-    ) -> None:
+        data: numpy.ndarray,
+        semantic: BufferSemantic | int,
+        semantic_converters: list[Callable | None] | None = None,
+        format_converters: list[Callable | None] | None = None,
+    ):
         if isinstance(semantic, int):
             semantic = self.layout.semantics[semantic]
         current_semantic = self.layout.get_element(semantic.abstract)
@@ -234,19 +514,24 @@ class NumpyBuffer:
         if semantic_converters is not None:
             for data_converter in semantic_converters:
                 data = data_converter(data)
-        if current_semantic.format != semantic.format:
-            data = current_semantic.format.type_encoder(data)
         if format_converters is not None:
             for data_converter in format_converters:
                 data = data_converter(data)
-        self.set_field(current_semantic.get_name(), data)
+        if data.dtype != current_semantic.format.numpy_base_type:
+            data = current_semantic.format.type_encoder(data)
+        try:
+            self.set_field(current_semantic.get_name(), data)
+        except Exception as e:
+            raise ValueError(
+                f"Failed to import semantic {semantic} to buffer layout {self.layout}: {e!s}"
+            ) from e
 
     def import_data(
         self,
         data: "NumpyBuffer",
         semantic_converters: dict[AbstractSemantic, list[Callable]],
         format_converters: dict[AbstractSemantic, list[Callable]],
-    ) -> None:
+    ):
         for buffer_semantic in self.layout.semantics:
             data_semantic = data.layout.get_element(buffer_semantic.abstract)
 
@@ -261,30 +546,352 @@ class NumpyBuffer:
                 format_converters.get(buffer_semantic.abstract, []),
             )
 
-    def import_raw_data(self, data: NDArray) -> None:
-        self.data = numpy.frombuffer(data, dtype=self.layout.get_numpy_type())
+    def import_raw_data(self, data: numpy.ndarray):
+        dtype = self.layout.get_numpy_type()
+        self.data = numpy.frombuffer(data, dtype=dtype)
 
-    def get_bytes(self) -> bytes:
+    def import_txt_data(
+        self,
+        data: str,
+        remapped_semantics: dict[AbstractSemantic, BufferSemantic] = {},
+    ):
+        # Build regex pattern dynamically
+        pattern_lines = []
+
+        # float_pattern = r"[+-]?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?"
+        float_pattern = r"[+-]?(?:\d+(?:\.\d*)?(?:[eE][+-]?\d+)?|nan)"
+
+        # Strict matching
+        # for i, semantic in enumerate(self.layout.semantics):
+        #     semantic_name = remapped_semantics.get(semantic.abstract, semantic).get_name()
+        #     semantic_name = semantic_name.split('.')[0]
+        #     # Each number in its own capture group
+        #     groups = ",".join([f"({float_pattern})" for _ in range(semantic.get_num_values())])
+        #     groups = groups.replace(",", r",\s*")
+        #     newline = r"\s*\n" if i < len(self.layout.semantics) - 1 else ""
+        #     # Match optional prefix "vb0[...]"
+        #     line_pattern = rf"vb0\[\d+\]\+\d+\s+{semantic_name}:\s*{groups}{newline}"
+        #     pattern_lines.append(line_pattern)
+
+        for semantic in self.layout.semantics:
+            semantic_name = remapped_semantics.get(
+                semantic.abstract, semantic
+            ).get_name()
+            semantic_name = semantic_name.split(".")[0]
+            groups = ",".join(
+                [f"({float_pattern})" for _ in range(semantic.get_num_values())]
+            )
+            groups = groups.replace(",", r",\s*")
+            line_pattern = rf"vb\d+\[\d+\]\+\d+\s+{semantic_name}:\s*{groups}\s*\n?"
+            pattern_lines.append(line_pattern)
+
+        # Join all lines
+        full_pattern = "".join(pattern_lines)
+
+        # Compile regex
+        pattern = re.compile(full_pattern)
+
+        matches = pattern.findall(data)
+        if not matches:
+            raise ValueError(
+                "Failed to parse any data with the provided layout and remapping!",
+            )
+
+        data = numpy.array(matches, dtype=numpy.float32)  # parse floats first
+        # Fill fields
+        start = 0
+        for semantic in self.layout.semantics:
+            n = semantic.get_num_values()
+            if semantic.format.type_decoder is None:
+                field_data = data[:, start : start + n].astype(
+                    semantic.format.numpy_base_type
+                )
+            else:
+                field_data = semantic.format.type_encoder(data[:, start : start + n])
+            if n == 1:
+                field_data = field_data.ravel()
+            self.set_field(semantic.get_name(), field_data)
+            start += n
+
+    def import_txt_data_ib(self, data: str):
+        headless = data.split("\n\n", 1)[-1]
+        faces = headless.split("\n")
+        ibs = [face.split(" ") for face in faces if face.strip()]
+        ibs = [int(index) for face in ibs for index in face]
+        semantic = self.layout.get_element(0)
+        if semantic is None:
+            raise ValueError(
+                "NumpyBuffer is missing semantic for index buffer data import!"
+            )
+        field_data = (
+            numpy.array(ibs, dtype=numpy.uint32)
+            .astype(semantic.format.numpy_base_type)
+            .reshape(-1, semantic.get_num_values())
+        )
+        self.set_field(semantic.get_name(), field_data)
+
+    def get_bytes(self):
         return self.data.tobytes()
 
-    def __len__(self) -> int:
-        return len(self.data)
-
-    def to_file(self, file: Path) -> None:
-        """Writes the buffer to a file in the specified format"""
-        with open(file, "wb", encoding="utf-8") as f:
-            f.write(self.get_bytes())
+    def __len__(self):
+        return 0 if self.data is None else len(self.data)
 
     def append(self, other: "NumpyBuffer") -> None:
         """Appends another NumpyBuffer to this one"""
         if self.layout != other.layout:
             raise ValueError("Layouts do not match!")
+        if other.data is None:
+            return
         self.data = (
-            other.data if len(self.data) == 0 else numpy.append(self.data, other.data)
+            other.data if self.data is None else numpy.append(self.data, other.data)
         )
 
-    def copy(self) -> "NumpyBuffer":
-        """Returns a copy of the buffer"""
-        new_buffer: NumpyBuffer = NumpyBuffer(self.layout)
-        new_buffer.data = self.data.copy()
-        return new_buffer
+
+MIGOTO_FORMAT_HEADER_CONVERTERS = {
+    "topology": lambda value: Topology(value),
+    "format": lambda value: DXGIFormat(value.replace("DXGI_FORMAT_", "")),
+}
+
+
+MIGOTO_FORMAT_ELEMENT_CONVERTERS = {
+    "SemanticName": lambda value: Semantic(value),
+    "Format": lambda value: DXGIFormat(value.replace("DXGI_FORMAT_", "")),
+    "InputSlotClass": lambda value: InputSlotClass(value),
+}
+
+
+@dataclass
+class MigotoFormat:
+    # Common
+    byte_offset: int = 0
+    topology: Topology | None = None
+    # IB
+    format: DXGIFormat | None = None
+    first_index: int = 0
+    index_count: int = 0
+    # VB
+    stride: int = 0
+    first_vertex: int = 0
+    vertex_count: int = 0
+    first_instance: int = 0
+    instance_count: int = 0
+    # Semantics
+    ib_layout: BufferLayout | None = None
+    vb_layout: BufferLayout | None = None
+
+    def __post_init__(self):
+        self.verify_migoto_format()
+
+    @classmethod
+    def from_paths(
+        cls,
+        fmt_path: Path | None = None,
+        vb_path: Path | None = None,
+        ib_path: Path | None = None,
+    ) -> "MigotoFormat":
+        # Try to auto-detect fmt path from VB path
+        if fmt_path is None and vb_path and vb_path.is_file():
+            fmt_path = vb_path.with_suffix(".fmt")
+
+        # Try to auto-detect fmt path from IB path
+        if fmt_path is None and ib_path and ib_path.is_file():
+            fmt_path = ib_path.with_suffix(".fmt")
+
+        # Raise exceptions if fmt file resolution failed
+        if fmt_path is None:
+            raise ValueError(
+                f"Failed to resolve format file for VB `{vb_path}` and IB `{ib_path}`"
+            )
+        if fmt_path.is_file():
+            # Read migoto format from fmt file
+            with open(fmt_path) as fmt_file:
+                fmt = MigotoFormat.from_fmt_file(fmt_file)
+        else:
+            if ib_path is None or vb_path is None:
+                raise ValueError(
+                    f"Failed to resolve format file for VB `{vb_path}` and IB `{ib_path}` and auto-detection failed (fmt file not found)!"
+                )
+            with open(ib_path) as ib_file, open(vb_path) as vb_file:
+                fmt = MigotoFormat.from_vb_ib_files(vb_file, ib_file)
+
+        return fmt
+
+    @classmethod
+    def from_dict(cls, migoto_data: dict) -> "MigotoFormat":
+        # Tokenize header data
+        tokenized_headers_data = cls.tokenize_data(
+            migoto_data, MIGOTO_FORMAT_HEADER_CONVERTERS
+        )
+
+        # Initialize instance with header data
+        fmt = cls(
+            **{
+                f.name: tokenized_headers_data[f.name]
+                for f in fields(cls)
+                if f.name in tokenized_headers_data
+            }
+        )
+
+        # Fill IB layout ("format" field always carries INDEX0 one)
+        if fmt.format is not None:
+            # Initialzie IB and add INDEX0 semantic
+            fmt.ib_layout = BufferLayout(
+                semantics=[], auto_stride=True, auto_offsets=False
+            )
+            index_semantic = BufferSemantic(
+                AbstractSemantic(Semantic.Index, 0), format=fmt.format
+            )
+            # Auto-fix semantic stride for common topoligies
+            # 3dmigoto writes only R component here (i.e. R16_UINT with for R16G16B16_UINT)
+            if fmt.topology == Topology.TriangleList:
+                index_semantic.stride = 3 * index_semantic.format.value_byte_width
+            elif fmt.topology == Topology.LineList:
+                index_semantic.stride = 2 * index_semantic.format.value_byte_width
+            # Add INDEX0 to IB
+            fmt.ib_layout.add_element(index_semantic)
+
+        # Get layout data and exit early if not found
+        elements_data = migoto_data.get("elements")
+        if elements_data is None:
+            return fmt
+
+        # Tokenize elements data
+        tokenized_elements_data = {}
+        for element_id, element_data in migoto_data["elements"].items():
+            tokenized_elements_data[element_id] = cls.tokenize_data(
+                element_data, MIGOTO_FORMAT_ELEMENT_CONVERTERS
+            )
+
+        # Fill instance with elements data
+
+        layout = BufferLayout(semantics=[], auto_stride=False, auto_offsets=False)
+        layout.stride = int(migoto_data.get("stride", 0))
+        # TODO: add support for "VB%i stride" format for txt and fmt files with multiple VBs per IB
+
+        for element in tokenized_elements_data.values():
+            buffer_semantic = BufferSemantic(
+                abstract=AbstractSemantic(
+                    element["SemanticName"], element["SemanticIndex"]
+                ),
+                format=element["Format"],
+                input_slot=element["InputSlot"],
+                offset=element["AlignedByteOffset"],
+                input_slot_class=element["InputSlotClass"],
+                instance_data_step_rate=element["InstanceDataStepRate"],
+            )
+
+            layout.add_element(buffer_semantic)
+
+        fmt.vb_layout = layout
+
+        return fmt
+
+    @classmethod
+    def parse_fmt_text(cls, lines: str) -> dict:
+        migoto_data = {}
+        elements_data = {}
+        current_element = None
+
+        for line in lines.splitlines():
+            line: str = line.lstrip()
+
+            if not line:
+                continue
+
+            if ":" not in line:
+                # raise ValueError(f'separator `:` not found in `{line}`')
+                break
+
+            if line.startswith("element["):
+                end = line.find("]")
+                if end == -1:
+                    raise ValueError(
+                        f"element line is corrupted (missing `]`): `{line}`"
+                    )
+                start = len("element[")
+                element_id = int(line[start:end].strip())
+                current_element = {}
+                elements_data[element_id] = current_element
+                continue
+
+            k, v = map(str.strip, line.split(":", 1))
+
+            if current_element is not None:
+                current_element[k] = v
+            else:
+                migoto_data[k.replace(" ", "_")] = v
+
+        migoto_data["elements"] = elements_data
+
+        return migoto_data
+
+    @classmethod
+    def from_fmt_text(cls, text: str) -> "MigotoFormat":
+        migoto_data = cls.parse_fmt_text(text)
+        return cls.from_dict(migoto_data)
+
+    @classmethod
+    def from_fmt_file(cls, file_data: io.IOBase) -> "MigotoFormat":
+        migoto_data = cls.parse_fmt_text(file_data.read())
+        return cls.from_dict(migoto_data)
+
+    @classmethod
+    def from_vb_ib_files(
+        cls, vb_file_data: io.IOBase, ib_file_data: io.IOBase
+    ) -> "MigotoFormat":
+        vb_fmt_data = cls.extract_txt_file_fmt_text(vb_file_data)
+        ib_fmt_data = cls.extract_txt_file_fmt_text(ib_file_data)
+        ib_fmt = cls.parse_fmt_text(ib_fmt_data)
+        vb_fmt = cls.parse_fmt_text(vb_fmt_data)
+
+        merged_fmt = ib_fmt | vb_fmt
+        merged_fmt["elements"] = ib_fmt["elements"] | vb_fmt["elements"]
+
+        return cls.from_dict(merged_fmt)
+
+    @classmethod
+    def extract_txt_file_fmt_text(cls, file_data: io.IOBase) -> str:
+        lines = ""
+        for line in file_data:
+            if not line.strip():
+                continue
+            if ":" not in line:
+                break
+            if line.startswith(("vertex-data", "instance-data")):
+                break
+            lines += line
+        return lines
+
+    @classmethod
+    def from_txt_file(cls, file_data: io.IOBase) -> "MigotoFormat":
+        fmt_text = cls.extract_txt_file_fmt_text(file_data)
+        migoto_data = cls.parse_fmt_text(fmt_text)
+        return cls.from_dict(migoto_data)
+
+    @staticmethod
+    def tokenize_data(
+        element_data: dict[str, str], converters: dict[str, Callable]
+    ) -> dict:
+        tokenized_data = {}
+        for k, v in element_data.items():
+            converter = converters.get(k)
+            if converter:
+                tokenized_data[k] = converter(v)
+            elif isinstance(v, str):
+                tokenized_data[k] = int(v)
+        return tokenized_data
+
+    def verify_migoto_format(self):
+        pass
+
+    @classmethod
+    def from_layouts(
+        cls,
+        vb_layout: BufferLayout | None = None,
+        ib_layout: BufferLayout | None = None,
+    ) -> "MigotoFormat":
+        fmt = cls(
+            ib_layout=ib_layout,
+            vb_layout=vb_layout,
+        )
+        return fmt

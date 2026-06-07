@@ -1,6 +1,6 @@
+import json
 import shutil
 import time
-import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Union
@@ -13,59 +13,18 @@ from numpy.typing import NDArray
 from .. import bl_info
 from ..libs.jinja2 import Environment, FileSystemLoader
 from .data.byte_buffer import (
+    AbstractSemantic,
     BufferLayout,
     BufferSemantic,
     NumpyBuffer,
     Semantic,
-    AbstractSemantic,
 )
 from .data.data_model import DataModelXXMI
+from .data.hash_json import Component, HashJsonData, SubObj
 from .data.ini_format import INI_file
 from .datastructures import GameEnum
 from .export_ops import mesh_triangulate
 from .operators import Fatal
-
-
-@dataclass
-class SubObj:
-    collection_name: str
-    depth: int
-    name: str
-    obj: Object
-    mesh: Mesh
-    vertex_count: int = 0
-    index_count: int = 0
-    index_offset: int = 0
-
-
-@dataclass
-class TextureData:
-    name: str
-    extension: str
-    hash: str
-
-
-@dataclass
-class Part:
-    fullname: str
-    objects: list[SubObj]
-    textures: list[TextureData]
-    first_index: int
-    vertex_count: int = 0
-
-
-@dataclass
-class Component:
-    fullname: str
-    parts: list[Part]
-    root_vs: str
-    draw_vb: str
-    position_vb: str
-    blend_vb: str
-    texcoord_vb: str
-    ib: str
-    vertex_count: int = 0
-    strides: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -106,7 +65,7 @@ class ModExporter:
     mod_file: ModFile = field(init=False)
     ini_content: str = field(init=False)
     files_to_write: dict[Path, Union[str, NDArray]] = field(init=False)
-    files_to_copy: dict[Path, Path] = field(init=False)
+    files_to_copy: list[tuple[Path, Path]] = field(init=False)
 
     def __post_init__(self) -> None:
         print("Initializing data for export...")
@@ -163,81 +122,45 @@ class ModExporter:
             game=self.game,
             credit=self.credit,
         )
-        seen_hashes: set[str] = set()
-        for component in self.hash_data:
-            current_name: str = f"{self.mod_name}{component['component_name']}"
-            component_entry: Component = Component(
-                fullname=current_name,
-                parts=[],
-                root_vs=component.get("root_vs", ""),
-                draw_vb=component.get("draw_vb", ""),
-                position_vb=component.get("position_vb", ""),
-                blend_vb=component.get("blend_vb", ""),
-                texcoord_vb=component.get("texcoord_vb", ""),
-                ib=component.get("ib", ""),
-                strides={},
-            )
+        hash_json_data = HashJsonData(self.dump_path / "hash.json")
+        for component in hash_json_data.components:
             comp_matching_objs: list[Object] = [
-                obj for obj in candidate_objs if obj.name.startswith(current_name)
+                obj for obj in candidate_objs if obj.name.startswith(component.fullname)
             ]
-            if len(comp_matching_objs) == 0 and component["draw_vb"] != "":
+            if len(comp_matching_objs) == 0 and component.draw_vb != "":
                 continue
-            for j, part in enumerate(component["object_classifications"]):
-                part_name: str = current_name + part
+            for part in component.parts:
+                if not self.copy_textures:
+                    part.textures = []
+                if component.draw_vb == "":
+                    continue
+
                 objects: list[SubObj] = []
-                textures: list[TextureData] = []
-                if self.copy_textures:
-                    textures = [TextureData(*e) for e in component["texture_hashes"][j]]
-                    if self.ignore_duplicate_textures:
-                        textures = [
-                            t
-                            for t in textures
-                            if t.hash not in seen_hashes and not seen_hashes.add(t.hash)
-                        ]
-                    if self.no_ramps:
-                        textures = [
-                            t
-                            for t in textures
-                            if t.name.lower()
-                            not in [
-                                "shadowramp",
-                                "metalmap",
-                                "diffuseguide",
-                            ]
-                        ]
                 matching_objs: list[Object] = [
-                    obj for obj in candidate_objs if obj.name.startswith(part_name)
+                    obj for obj in candidate_objs if obj.name.startswith(part.fullname)
                 ]
-                if component["draw_vb"] != "":
-                    if not matching_objs:
-                        raise Fatal(f"Cannot find object {part_name} in the scene.")
-                    if len(matching_objs) > 1:
-                        raise Fatal(
-                            f"Found multiple objects with the name {part_name}."
-                        )
-                    obj: Object = matching_objs[0]
-                    collection = [
-                        c
-                        for c in bpy.data.collections
-                        if c.name.lower().startswith((part_name).lower())
-                    ]
-                    if len(collection) > 1:
-                        raise Fatal(
-                            f"ERROR: Found multiple collections with the name {part_name}. Ensure only one collection exists with that name."
-                        )
-                    if len(collection) == 0:
-                        self.obj_from_col(obj, None, objects)
-                    else:
-                        self.obj_from_col(obj, collection[0], objects)
-                component_entry.parts.append(
-                    Part(
-                        fullname=part_name,
-                        objects=objects,
-                        textures=textures,
-                        first_index=component["object_indexes"][j],
+                if not matching_objs:
+                    raise Fatal(f"Cannot find object {part.fullname} in the scene.")
+                if len(matching_objs) > 1:
+                    raise Fatal(
+                        f"Found multiple objects with the name {part.fullname}."
                     )
-                )
-            self.mod_file.components.append(component_entry)
+                obj: Object = matching_objs[0]
+                collection = [
+                    c
+                    for c in bpy.data.collections
+                    if c.name.lower().startswith((part.fullname).lower())
+                ]
+                if len(collection) > 1:
+                    raise Fatal(
+                        f"ERROR: Found multiple collections with the name {part.fullname}. Ensure only one collection exists with that name."
+                    )
+                if len(collection) == 0:
+                    self.obj_from_col(obj, None, objects)
+                else:
+                    self.obj_from_col(obj, collection[0], objects)
+                part.objects = objects
+            self.mod_file.components.append(component)
 
     def obj_from_col(
         self,
@@ -300,7 +223,7 @@ class ModExporter:
     def generate_buffers(self) -> None:
         """Generate buffers for the objects."""
         self.files_to_write = {}
-        self.files_to_copy = {}
+        self.files_to_copy = []
         for component in self.mod_file.components:
             data_model: DataModelXXMI = DataModelXXMI.from_obj(
                 (
@@ -324,11 +247,13 @@ class ModExporter:
             vb_offset: int = 0
             for part in component.parts:
                 print(f"Processing {part.fullname} " + "-" * 10)
+                # XXX:: This system duplicates textures when 2 parts share them.
+                # We should probably imitate that link on the export folder and lock it behind a toggle
                 for t in part.textures:
-                    tex_name = part.fullname + t.name + t.extension
-                    self.files_to_copy[self.dump_path / tex_name] = (
-                        self.destination / tex_name
-                    )
+                    source = t.path
+                    dest = self.destination / (t.fullname + t.extension)
+                    self.files_to_copy.append((source, dest))
+
                 if component.draw_vb == "":
                     continue
                 part_ib: NumpyBuffer = NumpyBuffer(data_model.buffers_format["IB"])
@@ -353,20 +278,21 @@ class ModExporter:
                         excluded_buffers,
                         data_model.mirror_mesh,
                     )
-                    gen_buffers["IB"].data["INDEX"] += vb_offset
+                    if gen_buffers["IB"].data is not None:
+                        gen_buffers["IB"].data["INDEX"] += vb_offset
+                        entry.index_count = len(gen_buffers["IB"].data)
+                        part_ib.append(gen_buffers["IB"])
                     for k, v in out_buffers.items():
                         if k not in gen_buffers:
                             continue
                         v.append(gen_buffers[k])
-                    part_ib.append(gen_buffers["IB"])
                     vb_offset += v_count
                     entry.vertex_count = v_count
                     part.vertex_count += v_count
                     component.vertex_count += v_count
-                    entry.index_count = len(gen_buffers["IB"].data)
                     entry.index_offset = ib_offset
                     ib_offset += entry.index_count
-                if len(part_ib) == 0:
+                if part_ib.data is None or len(part_ib) == 0:
                     print(f"Skipping {part.fullname}.ib due to no index data.")
                     continue
                 self.files_to_write[self.destination / (part.fullname + ".ib")] = (
@@ -375,10 +301,16 @@ class ModExporter:
             if self.outline_optimization and len(out_buffers) > 0:
                 self.optimize_outlines(out_buffers)
             for key, buffer in out_buffers.items():
+                if key == "IB":
+                    continue
                 self.files_to_write[
                     self.destination / (component.fullname + key + ".buf")
                 ] = buffer.data
-                component.strides[key.lower()] = buffer.data.strides[0]
+            component.strides = {
+                k.lower(): v.stride
+                for k, v in data_model.buffers_format.items()
+                if k != "IB"
+            }
 
     def verify_mesh_requirements(
         self,
@@ -400,11 +332,15 @@ class ModExporter:
         for sem in semantics_to_check:
             abs_enum: Semantic = sem.abstract.enum
             abs_name: str = sem.abstract.get_name()
-            if abs_enum == Semantic.Color and mesh.vertex_colors.get(abs_name) is None:
+            if (
+                abs_enum == Semantic.Color
+                and mesh.vertex_colors.get(abs_name) is None
+                and mesh.color_attributes.get(abs_name) is None
+            ):
                 missing_colors.append(abs_name)
             if abs_enum == Semantic.TexCoord and mesh.uv_layers.get(abs_name) is None:
                 missing_uvs.append(abs_name)
-            if abs_enum == Semantic.Blendweight:
+            if abs_enum == Semantic.Blendweights:
                 if len(mesh.vertices) > 0 and len(obj.vertex_groups) == 0:
                     self.operator.report(
                         {"WARNING"},
@@ -636,15 +572,16 @@ class ModExporter:
                 raise Fatal(f"Error writing file {file_path}: {e}")
         if not self.copy_textures:
             return
-        for src, dest in self.files_to_copy.items():
+        for src, dest in self.files_to_copy:
             try:
-                print(f" - {dest.name}")
                 if not dest.exists():
                     dest.parent.mkdir(parents=True, exist_ok=True)
                 if dest.exists():
+                    print(f" - {dest.name} skipped.")
                     continue
                 shutil.copy(src, dest)
-            except (OSError, IOError) as e:
+                print(f" - {dest.name}")
+            except Exception as e:
                 raise Fatal(f"Error copying file {src} to {dest}: {e}")
 
     def cleanup(self) -> None:

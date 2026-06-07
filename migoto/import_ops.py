@@ -1,49 +1,59 @@
 import itertools
 import os
-import struct
-
 import re
-import numpy
+import struct
+from glob import escape as glob_escape
+from glob import glob
 from pathlib import Path
 from typing import Callable
-from glob import glob, escape as glob_escape
 
 import bpy
-from bpy.props import BoolProperty, CollectionProperty, StringProperty
+import numpy
+from bpy.props import (
+    BoolProperty,
+    CollectionProperty,
+    EnumProperty,
+    StringProperty,
+)
 from bpy.types import (
+    Context,
+    Mesh,
+    Object,
     Operator,
     OperatorFileListElement,
-    PropertyGroup,
-    Context,
-    Object,
-    Mesh,
 )
 from bpy_extras.io_utils import (
     ImportHelper,
+    axis_conversion,
     orientation_helper,
     unpack_list,
-    axis_conversion,
 )
 
+from .data.byte_buffer import Semantic
+
 from .datahandling import (
-    find_stream_output_vertex_buffers,
-    open_frame_analysis_log_file,
     apply_vgmap,
+    assert_pointlist_ib_is_pointless,
+    find_stream_output_vertex_buffers,
+    import_pose,
     new_custom_attribute_float,
     new_custom_attribute_int,
-    assert_pointlist_ib_is_pointless,
-    import_pose,
+    open_frame_analysis_log_file,
 )
 from .datastructures import (
     Fatal,
+    GameEnum,
     ImportPaths,
+    IndexBuffer,
     IOOBJOrientationHelper,
+    SemanticRemapItem,
     VBSOMapEntry,
     VertexBufferGroup,
-    IndexBuffer,
+    game_enum,
     vertex_color_layer_channels,
 )
 from .export_ops import XXMIProperties
+from .importer import ImporterOptions, ObjectImporter
 
 
 def load_3dmigoto_mesh_bin(operator: Operator, vb_paths, ib_paths, pose_path):
@@ -526,6 +536,7 @@ def import_3dmigoto_vb_ib(
     obj["3DMigoto:Topology"] = vb.topology
     for raw_vb in vb.vbs:
         obj["3DMigoto:VB%iStride" % raw_vb.idx] = raw_vb.stride
+    obj["3DMigoto:VertexCount"] = vb.vertex_count
     obj["3DMigoto:FirstVertex"] = vb.first
     # Record these import options so the exporter can set them to match by
     # default. Might also consider adding them to the .fmt file so reimporting
@@ -546,6 +557,7 @@ def import_3dmigoto_vb_ib(
         # Attach the index buffer layout to the object for later exporting.
         obj["3DMigoto:IBFormat"] = ib.format
         obj["3DMigoto:FirstIndex"] = ib.first
+        obj["3DMigoto:IndexCount"] = ib.index_count
     elif vb.topology == "trianglelist":
         import_faces_from_vb_trianglelist(mesh, vb, flip_winding)
     elif vb.topology == "trianglestrip":
@@ -560,7 +572,7 @@ def import_3dmigoto_vb_ib(
             ),
         )
 
-    (blend_indices, blend_weights, texcoords, vertex_layers, use_normals, normals) = (
+    blend_indices, blend_weights, texcoords, vertex_layers, use_normals, normals = (
         import_vertices(
             mesh, obj, vb, operator, semantic_translations, flip_normal, flip_mesh
         )
@@ -676,83 +688,6 @@ def import_3dmigoto_raw_buffers(
         )
 
 
-semantic_remap_enum = [
-    (
-        "None",
-        "No change",
-        "Do not remap this semantic. If the semantic name is recognised the script will try to interpret it, otherwise it will preserve the existing data in a vertex layer",
-    ),
-    (
-        "POSITION",
-        "POSITION",
-        "This data will be used as the vertex positions. There should generally be exactly one POSITION semantic for hopefully obvious reasons",
-    ),
-    (
-        "NORMAL",
-        "NORMAL",
-        "This data will be used as split (custom) normals in Blender.",
-    ),
-    (
-        "TANGENT",
-        "TANGENT (CAUTION: Discards data!)",
-        "Data in the TANGENT semantics are discarded on import, and recalculated on export",
-    ),
-    # ('BINORMAL', 'BINORMAL', "Don't encourage anyone to choose this since the data will be entirely discarded"),
-    (
-        "BLENDINDICES",
-        "BLENDINDICES",
-        "This semantic holds the vertex group indices, and should be paired with a BLENDWEIGHT semantic that has the corresponding weights for these groups",
-    ),
-    (
-        "BLENDWEIGHT",
-        "BLENDWEIGHT",
-        "This semantic holds the vertex group weights, and should be paired with a BLENDINDICES semantic that has the corresponding vertex group indices that these weights apply to",
-    ),
-    (
-        "TEXCOORD",
-        "TEXCOORD",
-        "Typically holds UV coordinates, though can also be custom data. Choosing this will import the data as a UV layer (or two) in Blender",
-    ),
-    (
-        "COLOR",
-        "COLOR",
-        "Typically used for vertex colors, though can also be custom data. Choosing this option will import the data as a vertex color layer in Blender",
-    ),
-    (
-        "Preserve",
-        "Unknown / Preserve",
-        "Don't try to interpret the data. Choosing this option will simply store the data in a vertex layer in Blender so that it can later be exported unmodified",
-    ),
-]
-
-
-class SemanticRemapItem(PropertyGroup):
-    semantic_from: bpy.props.StringProperty(name="From", default="ATTRIBUTE")
-    semantic_to: bpy.props.EnumProperty(
-        items=semantic_remap_enum, name="Change semantic interpretation"
-    )
-    # Extra information when this is filled out automatically that might help guess the correct semantic:
-    Format: bpy.props.StringProperty(name="DXGI Format")
-    InputSlot: bpy.props.IntProperty(name="Vertex Buffer")
-    InputSlotClass: bpy.props.StringProperty(name="Input Slot Class")
-    AlignedByteOffset: bpy.props.IntProperty(name="Aligned Byte Offset")
-    valid: bpy.props.BoolProperty(default=True)
-    tooltip: bpy.props.StringProperty(
-        default="This is a manually added entry. It's recommended to pre-fill semantics from selected files via the menu to the right to avoid typos"
-    )
-
-    def update_tooltip(self):
-        if not self.Format:
-            return
-        self.tooltip = "vb{}+{} {}".format(
-            self.InputSlot, self.AlignedByteOffset, self.Format
-        )
-        if self.InputSlotClass == "per-instance":
-            self.tooltip = ". This semantic holds per-instance data (such as per-object transformation matrices) which will not be used by the script"
-        elif self.valid is False:
-            self.tooltip += ". This semantic is invalid - it may share the same location as another semantic or the vertex buffer it belongs to may be missing / too small"
-
-
 class ClearSemanticRemapList(Operator):
     """Clear the semantic remap list"""
 
@@ -772,6 +707,7 @@ class PrefillSemanticRemapList(Operator):
     bl_label = "Prefill from selected files"
 
     def execute(self, context):
+        # TODO: rewrite to use new classes for buffer reading
         import_operator = context.space_data.active_operator
         semantic_remap_list = import_operator.properties.semantic_remap
         semantics_in_list = {x.semantic_from for x in semantic_remap_list}
@@ -1117,6 +1053,457 @@ class Import3DMigotoFrameAnalysis(Operator, ImportHelper, IOOBJOrientationHelper
         pass
 
 
+class ImportXXMIDump(Operator, ImportHelper, IOOBJOrientationHelper):
+    """Import a mesh dumped with XXMI Dump"""
+
+    bl_idname = "import_mesh.xxmi_dump"
+    bl_label = "Import XXMI dump folder"
+    bl_options = {"PRESET", "UNDO"}
+
+    filename_ext = ".txt"
+    filter_glob: StringProperty(
+        default="*.txt",
+        options={"HIDDEN"},
+    )
+
+    files: CollectionProperty(
+        name="File Path",
+        type=OperatorFileListElement,
+    )
+
+    block_update: BoolProperty(default=False)
+
+    def sync_preset_to_settings(self, context):
+        """Triggered when the USER changes the Game Dropdown."""
+        if self.game == "None":
+            return
+
+        hoyoverse_standard = (
+            GameEnum.HonkaiImpact3rd.name,
+            GameEnum.HonkaiImpactPart2.name,
+            GameEnum.GenshinImpact.name,
+            GameEnum.HonkaiStarRail.name,
+        )
+        self.block_update = True
+        if self.game in hoyoverse_standard:
+            self.flip_texcoord_v = True
+            self.flip_mesh = True
+            self.flip_winding = False
+            self.flip_normal = False
+            self.axis_forward = "-Z"
+            self.axis_up = "Y"
+            self.load_buf = True
+        elif self.game == GameEnum.ZenlessZoneZero.name:
+            self.flip_texcoord_v = True
+            self.flip_mesh = True
+            self.flip_winding = False
+            self.flip_normal = False
+            self.axis_forward = "Y"
+            self.axis_up = "Z"
+            self.load_buf = True
+        self.block_update = False
+
+    def sync_settings_to_preset(self, context):
+        """Triggered when the USER changes a checkbox or axis."""
+        if self.block_update:
+            return  # Stops circular updates
+        if (
+            self.flip_texcoord_v is True
+            and self.flip_mesh is True
+            and self.flip_winding is False
+            and self.flip_normal is False
+            and self.axis_forward == "-Z"
+            and self.axis_up == "Y"
+            and self.load_buf is True
+        ) or (
+            self.flip_texcoord_v is True
+            and self.flip_mesh is True
+            and self.flip_winding is False
+            and self.flip_normal is False
+            and self.axis_forward == "Y"
+            and self.axis_up == "Z"
+            and self.load_buf is True
+        ):
+            return  # Matches one of the presets, so don't set to None
+        if self.game != "None":
+            print(
+                "Custom settings don't match preset for any supported game, setting preset to NONE"
+            )
+            self.game = "None"
+
+    axis_forward: bpy.props.EnumProperty(
+        name="Forward",
+        items=[
+            ("X", "X Forward", ""),
+            ("Y", "Y Forward", ""),
+            ("Z", "Z Forward", ""),
+            ("-X", "-X Forward", ""),
+            ("-Y", "-Y Forward", ""),
+            ("-Z", "-Z Forward", ""),
+        ],
+        default="-Z",
+        update=sync_settings_to_preset,
+    )
+    axis_up: bpy.props.EnumProperty(
+        name="Up",
+        items=[
+            ("X", "X Up", ""),
+            ("Y", "Y Up", ""),
+            ("Z", "Z Up", ""),
+            ("-X", "-X Up", ""),
+            ("-Y", "-Y Up", ""),
+            ("-Z", "-Z Up", ""),
+        ],
+        default="Y",
+        update=sync_settings_to_preset,
+    )
+    flip_texcoord_v: BoolProperty(
+        name="Flip TEXCOORD V",
+        description="Flip TEXCOORD V asix during importing",
+        default=True,
+        update=sync_settings_to_preset,
+    )
+
+    flip_winding: BoolProperty(
+        name="Flip Winding Order",
+        description="Flip winding order (face orientation) during importing. Try if the model doesn't seem to be shading as expected in Blender and enabling the 'Face Orientation' overlay shows **RED** (if it shows BLUE, try 'Flip Normal' instead). Not quite the same as flipping normals within Blender as this only reverses the winding order without flipping the normals. Recommended for Unreal Engine",
+        default=False,
+        update=sync_settings_to_preset,
+    )
+
+    flip_mesh: BoolProperty(
+        name="Flip Mesh",
+        description="Mirrors mesh over the X Axis on import, and invert the winding order.",
+        default=False,
+        update=sync_settings_to_preset,
+    )
+
+    flip_normal: BoolProperty(
+        name="Flip Normal",
+        description="Flip Normals during importing. Try if the model doesn't seem to be shading as expected in Blender and enabling 'Face Orientation' overlay shows **BLUE** (if it shows RED, try 'Flip Winding Order' instead). Not quite the same as flipping normals within Blender as this won't reverse the winding order",
+        default=False,
+        update=sync_settings_to_preset,
+    )
+
+    create_materials: BoolProperty(
+        name="Create Materials",
+        description="Create Blender materials based on the material information in the frame analysis dump. This will create one material per unique material in the dump, and assign them to the imported meshes. Note that these materials will not be set up with any textures or shader nodes, they will just be blank materials with the correct names assigned to the meshes",
+        default=False,
+    )
+
+    create_collections: BoolProperty(
+        name="Create Collections",
+        description="Creates collections to match the exported object for merging purposes. ie: Objects within said collection will be merged to that in game object for export.",
+        default=False,
+    )
+
+    load_related: BoolProperty(
+        name="Auto-load related meshes",
+        description="Automatically load related meshes found in the frame analysis dump",
+        default=True,
+    )
+
+    load_related_so_vb: BoolProperty(
+        name="Load pre-SO buffers (EXPERIMENTAL)",
+        description="Scans the frame analysis log file to find GPU pre-skinning Stream Output techniques in prior draw calls, and loads the unposed vertex buffers from those calls that are suitable for editing. Recommended for Unity games to load neutral poses",
+        default=False,
+    )
+
+    load_buf: BoolProperty(
+        name="Load .buf files instead",
+        description="Load the mesh from the binary .buf dumps instead of the .txt files\nThis will load the entire mesh as a single object instead of separate objects from each draw call",
+        default=False,
+    )
+
+    load_buf_limit_range: BoolProperty(
+        name="Limit to draw range",
+        description="Load just the vertices/indices used in the draw call (equivalent to loading the .txt files) instead of the complete buffer",
+        default=False,
+    )
+
+    merge_meshes: BoolProperty(
+        name="Merge meshes together",
+        description="Merge all selected meshes together into one object. Meshes must be related",
+        default=False,
+    )
+
+    pose_cb: StringProperty(
+        name="Bone CB",
+        description='Indicate a constant buffer slot (e.g. "vs-cb2") containing the bone matrices',
+        default="",
+    )
+
+    pose_cb_off: bpy.props.IntVectorProperty(
+        name="Bone CB range",
+        description="Indicate start and end offsets (in multiples of 4 component values) to find the matrices in the Bone CB",
+        default=[0, 0],
+        size=2,
+        min=0,
+    )
+
+    pose_cb_step: bpy.props.IntProperty(
+        name="Vertex group step",
+        description="If used vertex groups are 0,1,2,3,etc specify 1. If they are 0,3,6,9,12,etc specify 3",
+        default=1,
+        min=1,
+    )
+
+    semantic_remap: bpy.props.CollectionProperty(type=SemanticRemapItem)
+    semantic_remap_idx: bpy.props.IntProperty(
+        name="Semantic Remap",
+        description="Enter the SemanticName and SemanticIndex the game is using on the left (e.g. TEXCOORD3), and what type of semantic the script should treat it as on the right",
+    )  # Needed for template_list
+
+    merge_verts: BoolProperty(
+        name="Merge Vertices",
+        description="Merge by distance to remove duplicate vertices",
+        default=False,
+    )
+    tris_to_quads: BoolProperty(
+        name="Tris to Quads",
+        description="Convert all tris to quads",
+        default=False,
+    )
+    clean_loose: BoolProperty(
+        name="Clean Loose",
+        description="Remove loose geometry",
+        default=False,
+    )
+
+    game: EnumProperty(
+        name="Game preset",
+        description="Select the game you are modding to present configuration according to that game",
+        items=game_enum + [("None", "", "No preset, using custom settings")],
+        default="None",
+        update=sync_preset_to_settings,
+    )
+    simple_mode: BoolProperty(
+        name="Simple mode",
+        description="Hides some of the more technical options and only shows the most commonly used ones. Recommended for users who just want to quickly import meshes without worrying about the technical details",
+        default=True,
+    )
+
+    def get_vb_ib_paths(self, load_related=None) -> set[ImportPaths]:
+        buffer_pattern = re.compile(
+            r"""-(?:ib|vb[0-9]+)(?P<hash>=[0-9a-f]+)?(?=[^0-9a-f=])"""
+        )
+        vb_regex = re.compile(
+            r"""^(?P<draw_call>[0-9]+)-vb(?P<slot>[0-9]+)="""
+        )  # TODO: Combine with above? (careful not to break hold type frame analysis)
+
+        dirname = os.path.dirname(self.filepath)
+        ret = set()
+        if load_related is None:
+            load_related = self.load_related
+
+        vb_so_map = {}
+        if self.load_related_so_vb:
+            try:
+                fa_log = open_frame_analysis_log_file(dirname)
+            except FileNotFoundError:
+                self.report(
+                    {"WARNING"},
+                    "Frame Analysis Log File not found, loading unposed meshes from GPU Stream Output pre-skinning passes will be unavailable",
+                )
+            else:
+                vb_so_map = find_stream_output_vertex_buffers(fa_log)
+
+        files = set()
+        if load_related:
+            for filename in self.files:
+                match = buffer_pattern.search(filename.name)
+                if match is None or not match.group("hash"):
+                    continue
+                paths = glob(
+                    os.path.join(
+                        dirname, "*%s*.txt" % filename.name[match.start() : match.end()]
+                    )
+                )
+                files.update([os.path.basename(x) for x in paths])
+        if not files:
+            files = [x.name for x in self.files]
+            if files == [""]:
+                raise Fatal("No files selected")
+
+        done = set()
+        for filename in files:
+            if filename in done:
+                continue
+            match = buffer_pattern.search(filename)
+            if match is None:
+                if (
+                    filename.lower().startswith("log")
+                    or filename.lower() == "shaderusage.txt"
+                ):
+                    # User probably just selected all files including the log
+                    continue
+                # TODO: Perhaps don't warn about extra files that may have been
+                # dumped out that we aren't specifically importing (such as
+                # constant buffers dumped with dump_cb or any buffer dumped
+                # with dump=), maybe provided we are loading other files from
+                # that draw call. Note that this is only applicable if 'load
+                # related' is disabled, as that option effectively filters
+                # these out above. For now just changed this to an error report
+                # rather than a Fatal so other files will still get loaded.
+                self.report(
+                    {"ERROR"},
+                    'Unable to find corresponding buffers from "{}" - filename did not match vertex/index buffer pattern'.format(
+                        filename
+                    ),
+                )
+                continue
+
+            use_bin = self.load_buf
+            if not match.group("hash") and not use_bin:
+                self.report(
+                    {"INFO"},
+                    "Filename did not contain hash - if Frame Analysis dumped a custom resource the .txt file may be incomplete, Using .buf files instead",
+                )
+                use_bin = True  # FIXME: Ask
+
+            ib_pattern = filename[: match.start()] + "-ib*" + filename[match.end() :]
+            vb_pattern = filename[: match.start()] + "-vb*" + filename[match.end() :]
+            ib_paths = glob(os.path.join(dirname, ib_pattern))
+            vb_paths = glob(os.path.join(dirname, vb_pattern))
+            done.update(map(os.path.basename, itertools.chain(vb_paths, ib_paths)))
+
+            if vb_so_map:
+                vb_so_paths = set()
+                for vb_path in vb_paths:
+                    vb_match = vb_regex.match(os.path.basename(vb_path))
+                    if vb_match:
+                        draw_call, slot = map(int, vb_match.group("draw_call", "slot"))
+                        so = vb_so_map.get(VBSOMapEntry(draw_call, slot))
+                        if so:
+                            # No particularly good way to determine which input
+                            # vertex buffers we need from the stream-output
+                            # pass, so for now add them all:
+                            vb_so_pattern = f"{so.draw_call:06}-vb*.txt"
+                            glob_result = glob(os.path.join(dirname, vb_so_pattern))
+                            if not glob_result:
+                                self.report(
+                                    {"WARNING"},
+                                    f"{vb_so_pattern} not found, loading unposed meshes from GPU Stream Output pre-skinning passes will be unavailable",
+                                )
+                            vb_so_paths.update(glob_result)
+                # FIXME: Not sure yet whether the extra vertex buffers from the
+                # stream output pre-skinning passes are best lumped in with the
+                # existing vb_paths or added as a separate set of paths. Advantages
+                # + disadvantages to each, and either way will need work.
+                vb_paths.extend(sorted(vb_so_paths))
+
+            if vb_paths and use_bin:
+                vb_bin_paths = [os.path.splitext(x)[0] + ".buf" for x in vb_paths]
+                ib_bin_paths = [os.path.splitext(x)[0] + ".buf" for x in ib_paths]
+                if all(
+                    [
+                        os.path.exists(x)
+                        for x in itertools.chain(vb_bin_paths, ib_bin_paths)
+                    ]
+                ):
+                    # When loading the binary files, we still need to process
+                    # the .txt files as well, as they indicate the format:
+                    ib_paths = list(zip(ib_bin_paths, ib_paths))
+                    vb_paths = list(zip(vb_bin_paths, vb_paths))
+                else:
+                    self.report(
+                        {"WARNING"},
+                        "Corresponding .buf files not found - using .txt files",
+                    )
+                    use_bin = False
+
+            pose_path = None
+            if self.pose_cb:
+                pose_pattern = (
+                    filename[: match.start()] + "*-" + self.pose_cb + "=*.txt"
+                )
+                try:
+                    pose_path = glob(os.path.join(dirname, pose_pattern))[0]
+                except IndexError:
+                    pass
+
+            if len(ib_paths) > 1:
+                raise Fatal("Error: excess index buffers in dump?")
+            elif len(ib_paths) == 0:
+                if use_bin:
+                    name = os.path.basename(vb_paths[0][0])
+                    ib_paths = [(None, None)]
+                else:
+                    name = os.path.basename(vb_paths[0])
+                    ib_paths = [None]
+                self.report(
+                    {"WARNING"},
+                    "{}: No index buffer present, support for this case is highly experimental".format(
+                        name
+                    ),
+                )
+            ret.add(ImportPaths(tuple(vb_paths), ib_paths[0], use_bin, pose_path))
+        return ret
+
+    def execute(self, context):
+        if self.simple_mode:
+            self.load_related = True
+            self.load_buf = True
+            if self.game == "None":
+                self.report(
+                    {"ERROR"},
+                    "Simple mode can only export the specified games. "
+                    + "Select one from the list to proceed or disable simple mode.",
+                )
+                return {"FINISHED"}
+        try:
+            semantic_remap_list = {
+                x.semantic_from: (
+                    Semantic.Attribute
+                    if x.semantic_to == "Preserve"
+                    else Semantic(x.semantic_to)
+                )
+                for x in self.semantic_remap
+                if x.semantic_to != "None"
+            }
+            cfg = ImporterOptions(
+                flip_texcoord_v=self.flip_texcoord_v,
+                flip_winding=self.flip_winding,
+                flip_mesh=self.flip_mesh,
+                flip_normal=self.flip_normal,
+                create_materials=self.create_materials,
+                create_collections=self.create_collections,
+                load_related=self.load_related,
+                load_related_so_vb=self.load_related_so_vb,
+                load_buf=self.load_buf,
+                load_buf_limit_range=self.load_buf_limit_range,
+                merge_meshes=self.merge_meshes,
+                pose_cb=self.pose_cb,
+                pose_cb_off=self.pose_cb_off,
+                pose_cb_step=self.pose_cb_step,
+                semantic_remap=semantic_remap_list,
+                merge_verts=self.merge_verts,
+                tris_to_quads=self.tris_to_quads,
+                clean_loose=self.clean_loose,
+                import_paths=self.get_vb_ib_paths(),
+                axis_forward=self.axis_forward,
+                axis_up=self.axis_up,
+            )
+            importer = ObjectImporter()
+            importer.import_object(self, context, cfg)
+            xxmi: XXMIProperties = context.scene.xxmi
+            if xxmi.dump_path == "":
+                hash_json_path = Path(self.filepath) / "hash.json"
+                if hash_json_path.exists():
+                    xxmi.dump_path = str(hash_json_path.parent)
+            if xxmi.game == "" and self.game != "":
+                xxmi.game = self.game
+        except Fatal as e:
+            self.report({"ERROR"}, str(e))
+        return {"FINISHED"}
+
+    def draw(self, context):
+        # Overriding the draw method to disable automatically adding operator
+        # properties to options panel, so we can define sub-panels to group
+        # options and disable grey out mutually exclusive options.
+        pass
+
+
 @orientation_helper(axis_forward="-Z", axis_up="Y")
 class Import3DMigotoRaw(Operator, ImportHelper, IOOBJOrientationHelper):
     """Import raw 3DMigoto vertex and index buffers"""
@@ -1184,7 +1571,7 @@ class Import3DMigotoRaw(Operator, ImportHelper, IOOBJOrientationHelper):
         dirname = os.path.dirname(self.filepath)
         for filename in self.files:
             try:
-                (vb_path, ib_path, fmt_path, vgmap_path) = self.get_vb_ib_paths(
+                vb_path, ib_path, fmt_path, vgmap_path = self.get_vb_ib_paths(
                     os.path.join(dirname, filename.name)
                 )
                 vb_path_norm = set(map(os.path.normcase, vb_path))

@@ -1,29 +1,31 @@
-import bpy
-from bpy.types import Panel, UIList, Menu, UILayout
 import addon_utils
+import bpy
 from bl_ui.generic_ui_list import draw_ui_list
+from bpy.types import Menu, Panel, UILayout, UIList
+
+from .. import addon_updater_ops
+from .export_ops import (
+    Export3DMigoto,
+    Export3DMigotoXXMI,
+    XXMIProperties,
+)
+from .import_ops import (
+    ClearSemanticRemapList,
+    Import3DMigotoFrameAnalysis,
+    ImportXXMIDump,
+    Import3DMigotoRaw,
+    PrefillSemanticRemapList,
+)
 from .operators import (
-    Import3DMigotoPose,
+    CLEAN_UV_NAMES,
+    RESET_VERTEX_COLORS,
     ApplyVGMap,
+    Import3DMigotoPose,
     VGROUP_SN_fill,
     VGROUP_SN_merge,
     VGROUP_SN_merge_ONE,
     VGROUP_SN_remove,
-    CLEAN_UV_NAMES,
-    RESET_VERTEX_COLORS,
 )
-from .import_ops import (
-    ClearSemanticRemapList,
-    PrefillSemanticRemapList,
-    Import3DMigotoFrameAnalysis,
-    Import3DMigotoRaw,
-)
-from .export_ops import (
-    Export3DMigoto,
-    Export3DMigotoXXMI,
-)
-from .. import addon_updater_ops
-from .export_ops import XXMIProperties
 
 
 class MIGOTO_UL_semantic_remap_list(UIList):
@@ -188,6 +190,165 @@ class MIGOTO_PT_ImportFrameAnalysisCleanUp(MigotoImportOptionsPanelBase, Panel):
         self.layout.prop(operator, "clean_loose")
 
 
+class MigotoImportXXMIDumpOptionsPanelBase(object):
+    bl_space_type = "FILE_BROWSER"
+    bl_region_type = "TOOL_PROPS"
+    bl_parent_id = "FILE_PT_operator"
+
+    @classmethod
+    def poll(cls, context):
+        operator = context.space_data.active_operator
+        if operator.bl_idname == "IMPORT_MESH_OT_xxmi_dump":
+            return not operator.simple_mode
+
+    def draw(self, context):
+        self.layout.use_property_split = True
+        self.layout.use_property_decorate = False
+
+
+class MIGOTO_PT_ImportXXMIDumpMainPanel(MigotoImportXXMIDumpOptionsPanelBase, Panel):
+    bl_label = ""
+    bl_order = 0
+
+    @classmethod
+    def poll(cls, context):
+        operator = context.space_data.active_operator
+        return operator.bl_idname == "IMPORT_MESH_OT_xxmi_dump"
+
+    def draw_header(self, context) -> None:
+        operator = context.space_data.active_operator
+        self.layout.prop(operator, "simple_mode")
+
+    def draw(self, context):
+        MigotoImportXXMIDumpOptionsPanelBase.draw(self, context)
+        operator = context.space_data.active_operator
+        if operator.simple_mode:
+            if operator.simple_mode is True and operator.game == "None":
+                box = self.layout.box()
+                box.alert = True
+                box.label(text="You must select a game", icon="ERROR")
+            self.layout.prop(operator, "game")
+            self.layout.prop(operator, "flip_mesh")
+            self.layout.prop(operator, "create_materials")
+            self.layout.prop(operator, "create_collections")
+            # Temporarily set as experimental/advanced
+            # self.layout.prop(operator, "merge_meshes")
+            self.layout.separator()
+            self.layout.prop(operator, "merge_verts")
+            self.layout.prop(operator, "tris_to_quads")
+            self.layout.prop(operator, "clean_loose")
+        else:
+            self.layout.prop(operator, "game")
+            self.layout.prop(operator, "flip_texcoord_v")
+            self.layout.prop(operator, "flip_winding")
+            self.layout.prop(operator, "flip_normal")
+            self.layout.prop(operator, "flip_mesh")
+            self.layout.prop(operator, "create_materials")
+            self.layout.prop(operator, "create_collections")
+
+
+class MIGOTO_PT_ImportXXMIDumpRelatedFilesPanel(
+    MigotoImportXXMIDumpOptionsPanelBase, Panel
+):
+    bl_label = "Related Files"
+    bl_order = 1
+
+    def draw(self, context):
+        MigotoImportXXMIDumpOptionsPanelBase.draw(self, context)
+        operator = context.space_data.active_operator
+        # self.layout.enabled = not operator.load_buf
+        self.layout.prop(operator, "load_related")
+        self.layout.prop(operator, "load_related_so_vb")
+        self.layout.prop(operator, "merge_meshes")
+
+
+class MIGOTO_PT_ImportXXMIDumpBufFilesPanel(
+    MigotoImportXXMIDumpOptionsPanelBase, Panel
+):
+    bl_label = "Load .buf files instead"
+    bl_options = {"DEFAULT_CLOSED"}
+    bl_order = 2
+
+    def draw_header(self, context):
+        operator = context.space_data.active_operator
+        self.layout.prop(operator, "load_buf", text="")
+
+    def draw(self, context):
+        MigotoImportXXMIDumpOptionsPanelBase.draw(self, context)
+        operator = context.space_data.active_operator
+        self.layout.enabled = operator.load_buf
+        self.layout.prop(operator, "load_buf_limit_range")
+
+
+class MIGOTO_PT_ImportXXMIDumpBonePanel(MigotoImportXXMIDumpOptionsPanelBase, Panel):
+    bl_label = ""
+    bl_options = {"DEFAULT_CLOSED"}
+    bl_order = 3
+
+    def draw_header(self, context):
+        operator = context.space_data.active_operator
+        self.layout.prop(operator, "pose_cb")
+
+    def draw(self, context):
+        MigotoImportXXMIDumpOptionsPanelBase.draw(self, context)
+        operator = context.space_data.active_operator
+        self.layout.prop(operator, "pose_cb_off")
+        self.layout.prop(operator, "pose_cb_step")
+
+
+class MIGOTO_PT_ImportXXMIDumpRemapSemanticsPanel(
+    MigotoImportXXMIDumpOptionsPanelBase, Panel
+):
+    bl_label = "Semantic Remap"
+    bl_options = {"DEFAULT_CLOSED"}
+    bl_order = 4
+
+    def draw(self, context):
+        MigotoImportXXMIDumpOptionsPanelBase.draw(self, context)
+        operator = context.space_data.active_operator
+        # TODO: Add layout.operator() to read selected file and fill in semantics
+
+        if context.path_resolve is None:
+            # Avoid exceptions in console - seems like draw() is called several
+            # times (not sure why) and sometimes path_resolve isn't available.
+            return
+        draw_ui_list(
+            self.layout,
+            context,
+            class_name="MIGOTO_UL_semantic_remap_list",
+            menu_class_name="MIGOTO_MT_semantic_remap_menu",
+            list_path="active_operator.properties.semantic_remap",
+            active_index_path="active_operator.properties.semantic_remap_idx",
+            unique_id="migoto_import_semantic_remap_list",
+            item_dyntip_propname="tooltip",
+        )
+
+
+class MIGOTO_PT_ImportXXMIDumpManualOrientation(
+    MigotoImportXXMIDumpOptionsPanelBase, Panel
+):
+    bl_label = "Orientation"
+    bl_order = 5
+
+    def draw(self, context):
+        MigotoImportXXMIDumpOptionsPanelBase.draw(self, context)
+        operator = context.space_data.active_operator
+        self.layout.prop(operator, "axis_forward")
+        self.layout.prop(operator, "axis_up")
+
+
+class MIGOTO_PT_ImportXXMIDumpCleanUp(MigotoImportXXMIDumpOptionsPanelBase, Panel):
+    bl_label = "Clean Up mesh after import"
+    bl_order = 6
+
+    def draw(self, context):
+        MigotoImportXXMIDumpOptionsPanelBase.draw(self, context)
+        operator = context.space_data.active_operator
+        self.layout.prop(operator, "merge_verts")
+        self.layout.prop(operator, "tris_to_quads")
+        self.layout.prop(operator, "clean_loose")
+
+
 class XXMI_PT_Sidebar(Panel):
     """Main Panel"""
 
@@ -208,9 +369,9 @@ class XXMI_PT_Sidebar(Panel):
         version: str = ".".join(str(i) for i in version)
         layout: UILayout = self.layout
         row = layout.row()
-        row.operator(
-            "wm.url_open", text="", icon="HELP"
-        ).url = "https://leotorrez.github.io/modding/guides/xxmi_tools"
+        row.operator("wm.url_open", text="", icon="HELP").url = (
+            "https://leotorrez.github.io/modding/guides/xxmi_tools"
+        )
         row.label(text=f"v{version}")
 
     def draw(self, context):
@@ -220,7 +381,10 @@ class XXMI_PT_Sidebar(Panel):
         col_1 = split.column()
         col_2 = split.column()
         col_1.prop(xxmi, "dump_path")
-        col_2.operator("dump.selector", icon="FILE_FOLDER", text="")
+        if xxmi.dump_path == "" and len(context.scene.objects) == 0:
+            col_2.operator("import_mesh.xxmi_dump", icon="PLUS", text="")
+        else:
+            col_2.operator("dump.selector", icon="FILE_FOLDER", text="")
         col_1.prop(xxmi, "destination_path")
         col_2.operator("destination.selector", icon="FILE_FOLDER", text="")
         col = layout.column(align=True)
@@ -334,6 +498,7 @@ class XXMI_PT_Toolbox(Panel):
     bl_label = "XXMI Toolbox"
     # bl_context = "objectmode"
     bl_order = 98
+    bl_options = {"DEFAULT_CLOSED"}
 
     def draw(self, context):
         layout = self.layout
@@ -351,10 +516,47 @@ class XXMI_PT_Toolbox(Panel):
         )
 
 
+class XXMI_PT_Object_properties(Panel):
+    """Object's properties Panel"""
+
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "XXMI Tools"
+    bl_idname = "XXMI_PT_Object_props"
+    bl_label = "XXMI Object's Custom properties"
+    bl_order = 1
+    bl_options = {"DEFAULT_CLOSED"}
+
+    @classmethod
+    def poll(cls, context):
+        if context.selected_objects is None or len(context.selected_objects) == 0:
+            return False
+        obj = context.selected_objects[0]
+        return obj is not None and any(k.startswith("3DMigoto:") for k in obj.keys())
+
+    def draw(self, context):
+        layout = self.layout
+        if context.selected_objects is None or len(context.selected_objects) == 0:
+            return
+        obj = context.selected_objects[0]
+        if obj is None or layout is None:
+            return
+        layout.label(text=f"Custom properties for {obj.name}:")
+        row = layout.split(factor=0.3)
+        col1 = row.column()
+        col2 = row.column()
+
+        items = [k for k in obj.keys() if k.startswith("3DMigoto:")]
+        items.sort()
+
+        for key in items:
+            col1.label(text=key[len("3DMigoto:") :])
+            col2.prop(obj, f'["{key}"]', text="")
+
+
 # TODO:
 # - Apply modifier to mesh with shapekeys
 # - Create collections on import
-# - Import materials
 
 
 class UpdaterPanel(Panel):
@@ -396,6 +598,13 @@ def menu_func_import_fa(self, context):
     )
 
 
+def menu_func_import_mat(self, context):
+    self.layout.operator(
+        ImportXXMIDump.bl_idname,
+        text="XXMI Dump(vb.txt + ib.txt)",
+    )
+
+
 def menu_func_import_raw(self, context):
     self.layout.operator(
         Import3DMigotoRaw.bl_idname, text="3DMigoto raw buffers (.vb + .ib)"
@@ -428,6 +637,7 @@ export_menu = bpy.types.TOPBAR_MT_file_export
 
 
 def register():
+    import_menu.append(menu_func_import_mat)
     import_menu.append(menu_func_import_fa)
     import_menu.append(menu_func_import_raw)
     export_menu.append(menu_func_export)
@@ -437,6 +647,7 @@ def register():
 
 
 def unregister():
+    import_menu.remove(menu_func_import_mat)
     import_menu.remove(menu_func_import_fa)
     import_menu.remove(menu_func_import_raw)
     export_menu.remove(menu_func_export)
