@@ -1314,6 +1314,8 @@ class ImportXXMIDump(Operator, ImportHelper, IOOBJOrientationHelper):
 
         done = set()
         for filename in files:
+            if filename.endswith(".fmt"):
+                filename = filename[:-4] + "-ib.buf"
             if filename in done:
                 continue
             match = buffer_pattern.search(filename)
