@@ -3,6 +3,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import bmesh
 import bpy
 from bpy.types import Collection, Context, Mesh, Object, Operator
 from bpy_extras.io_utils import axis_conversion
@@ -22,6 +23,7 @@ class ImporterOptions:
     flip_normal: bool = False
     create_materials: bool = False
     create_collections: bool = False
+    properties_container: str = "NONE"
     load_related: bool = False
     load_related_so_vb: bool = False
     load_buf: bool = True
@@ -404,11 +406,29 @@ class ObjectImporter:
         def fetch_by_fullname(objs: list[Object], fullname: str) -> Object | None:
             return next((o for o in objs if o.name.split(".")[0] == fullname), None)
 
-        def create_and_link_collection(col_name: str, obj: Object):
+        def create_and_link_collection(col_name: str, obj: Object, mesh_name: str):
             collection = bpy.data.collections.new(col_name)
             main_col.children.link(collection)
-            collection.objects.link(obj)
+            if cfg.properties_container == "EMPTY_MESHES":
+                props_col.objects.link(obj)
+            else:
+                collection.objects.link(obj)
+            if cfg.properties_container == "COLLECTIONS":
+                for k in [k for k in obj.keys() if k.startswith("3DMigoto:")]:
+                    collection[k] = obj[k]
+                    if isinstance(obj[k], bpy.types.ID):
+                        collection.id_properties_ui(k).update_from(obj.id_properties_ui(k))
+                    del obj[k]
             self.cleanup_object(operator, context, obj, cfg)
+            if cfg.properties_container == "EMPTY_MESHES":
+                mesh_obj = bpy.data.objects.new(mesh_name, obj.data.copy())
+                mesh_obj.matrix_world = obj.matrix_world
+                collection.objects.link(mesh_obj)
+                bm = bmesh.new()
+                bm.from_mesh(obj.data)
+                bmesh.ops.delete(bm, geom=bm.verts, context="VERTS")
+                bm.to_mesh(obj.data)
+                bm.free()
 
         assert context.scene is not None and context.scene.collection is not None
         main_col: Collection = bpy.data.collections.new(import_folder.stem)
@@ -421,12 +441,20 @@ class ObjectImporter:
             return
 
         assert hash_json_data is not None
+        if cfg.properties_container == "EMPTY_MESHES":
+            props_col = bpy.data.collections.new(import_folder.stem + "_CustomProperties")
+            props_col.color_tag = "COLOR_08"
+            main_col.children.link(props_col)
         for component in hash_json_data.components:
             if component_obj := fetch_by_fullname(objs, component.fullname):
-                create_and_link_collection(component.fullname, component_obj)
+                create_and_link_collection(
+                    component.fullname, component_obj, component.name
+                )
 
             if cfg.merge_meshes:
                 continue
             for part in component.parts:
                 if part_obj := fetch_by_fullname(objs, part.fullname):
-                    create_and_link_collection(part.fullname, part_obj)
+                    create_and_link_collection(
+                        part.fullname, part_obj, component.name + part.name
+                    )

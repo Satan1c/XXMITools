@@ -231,6 +231,8 @@ class MIGOTO_PT_ImportXXMIDumpMainPanel(MigotoImportXXMIDumpOptionsPanelBase, Pa
             self.layout.prop(operator, "flip_mesh")
             self.layout.prop(operator, "create_materials")
             self.layout.prop(operator, "create_collections")
+            if operator.create_collections:
+                self.layout.prop(operator, "properties_container")
             # Temporarily set as experimental/advanced
             # self.layout.prop(operator, "merge_meshes")
             self.layout.separator()
@@ -245,6 +247,8 @@ class MIGOTO_PT_ImportXXMIDumpMainPanel(MigotoImportXXMIDumpOptionsPanelBase, Pa
             self.layout.prop(operator, "flip_mesh")
             self.layout.prop(operator, "create_materials")
             self.layout.prop(operator, "create_collections")
+            if operator.create_collections:
+                self.layout.prop(operator, "properties_container")
 
 
 class MIGOTO_PT_ImportXXMIDumpRelatedFilesPanel(

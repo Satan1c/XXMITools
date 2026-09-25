@@ -1184,6 +1184,17 @@ class ImportXXMIDump(Operator, ImportHelper, IOOBJOrientationHelper):
         default=False,
     )
 
+    properties_container: EnumProperty(
+        name="Custom Properties",
+        description="Where to keep the custom properties required for export",
+        items=[
+            ("NONE", "None", "Keep custom properties on imported meshes"),
+            ("EMPTY_MESHES", "Empty meshes", "Keep custom properties on emptied copies of dump meshes in a separate collection, imported meshes are placed in their part collections"),
+            ("COLLECTIONS", "Collections", "Keep custom properties on part collections. Properties set on a mesh override those of its collection on export"),
+        ],
+        default="COLLECTIONS",
+    )
+
     load_related: BoolProperty(
         name="Auto-load related meshes",
         description="Automatically load related meshes found in the frame analysis dump",
@@ -1268,6 +1279,11 @@ class ImportXXMIDump(Operator, ImportHelper, IOOBJOrientationHelper):
         name="Simple mode",
         description="Hides some of the more technical options and only shows the most commonly used ones. Recommended for users who just want to quickly import meshes without worrying about the technical details",
         default=True,
+        update=lambda self, context: setattr(
+            self,
+            "properties_container",
+            "COLLECTIONS" if self.simple_mode else "EMPTY_MESHES",
+        ),
     )
 
     def get_vb_ib_paths(self, load_related=None) -> set[ImportPaths]:
@@ -1451,6 +1467,7 @@ class ImportXXMIDump(Operator, ImportHelper, IOOBJOrientationHelper):
                 flip_normal=self.flip_normal,
                 create_materials=self.create_materials,
                 create_collections=self.create_collections,
+                properties_container=self.properties_container,
                 load_related=self.load_related,
                 load_related_so_vb=self.load_related_so_vb,
                 load_buf=self.load_buf,
