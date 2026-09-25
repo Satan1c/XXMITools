@@ -11,7 +11,7 @@ import mathutils
 
 
 from ..data.numpy_mesh import NumpyMesh, NumpyMeshGroup
-from ..datahandling import Fatal
+from ..datahandling import Fatal, migoto_props
 from ..datastructures import GameEnum
 from .byte_buffer import (
     AbstractSemantic,
@@ -539,29 +539,22 @@ class DataModelXXMI(DataModel):
         cls.normalize_weights = normalize_weights
         if obj is None:
             return cls
-        for prop in [
-            "3DMigoto:FlipNormal",
-            "3DMigoto:FlipTangent",
-            "3DMigoto:FlipWinding",
-            "3DMigoto:FlipMesh",
-        ]:
-            if prop not in obj:
-                obj[prop] = False
-        cls.flip_winding = obj.get("3DMigoto:FlipWinding", False)
-        cls.flip_normal = obj.get("3DMigoto:FlipNormal", False)
-        cls.flip_tangent = obj.get("3DMigoto:FlipTangent", False)
-        cls.flip_bitangent_sign = obj.get("3DMigoto:Tangent", False)
-        cls.mirror_mesh = obj.get("3DMigoto:FlipMesh", False)
-        if obj.get("3DMigoto:VBLayout") is None:
+        props = migoto_props(obj)
+        cls.flip_winding = props.get("3DMigoto:FlipWinding", False)
+        cls.flip_normal = props.get("3DMigoto:FlipNormal", False)
+        cls.flip_tangent = props.get("3DMigoto:FlipTangent", False)
+        cls.flip_bitangent_sign = props.get("3DMigoto:Tangent", False)
+        cls.mirror_mesh = props.get("3DMigoto:FlipMesh", False)
+        if props.get("3DMigoto:VBLayout") is None:
             raise Fatal(
                 f"Object({obj.name}) is missing custom properties required for export! Reimport the mesh from dump folder."
             )
-        if (ib_f := obj.get("3DMigoto:IBFormat")) is None:
+        if (ib_f := props.get("3DMigoto:IBFormat")) is None:
             raise Fatal("Export doesn't support meshes without index buffer")
         for uv_layer in obj.data.uv_layers:
-            if obj.get("3DMigoto:" + uv_layer.name) is None:
+            if props.get("3DMigoto:" + uv_layer.name) is None:
                 continue
-            cls.flip_texcoords_vertical[uv_layer.name] = obj[
+            cls.flip_texcoords_vertical[uv_layer.name] = props[
                 "3DMigoto:" + uv_layer.name
             ]["flip_v"]
         ib_format: DXGIFormat = DXGIFormat(ib_f)
@@ -618,7 +611,7 @@ class DataModelXXMI(DataModel):
                 ]
                 tex_semantics: list[Semantic] = [Semantic.TexCoord, Semantic.Color]
         try:
-            for entry in obj.get("3DMigoto:VBLayout", []):
+            for entry in props.get("3DMigoto:VBLayout", []):
                 s_dict = entry.to_dict()
                 new_semantic = BufferSemantic(
                     # offset=semantic_dict["AlignedByteOffset"],
