@@ -534,31 +534,59 @@ class XXMI_PT_Object_properties(Panel):
     bl_order = 1
     bl_options = {"DEFAULT_CLOSED"}
 
+    @staticmethod
+    def props_sources(context) -> list:
+        if context.selected_objects:
+            obj = context.selected_objects[0]
+            return [*obj.users_collection, obj]
+        return [context.collection] if context.collection else []
+
+    @classmethod
+    def props(cls, context) -> dict:
+        return {
+            k: s
+            for s in cls.props_sources(context)
+            for k in s.keys()
+            if k.startswith("3DMigoto:")
+        }
+
     @classmethod
     def poll(cls, context):
-        if context.selected_objects is None or len(context.selected_objects) == 0:
-            return False
-        obj = context.selected_objects[0]
-        return obj is not None and any(k.startswith("3DMigoto:") for k in obj.keys())
+        return len(cls.props(context)) > 0
 
     def draw(self, context):
         layout = self.layout
-        if context.selected_objects is None or len(context.selected_objects) == 0:
+        if layout is None:
             return
-        obj = context.selected_objects[0]
-        if obj is None or layout is None:
-            return
-        layout.label(text=f"Custom properties for {obj.name}:")
+        layout.label(text=f"Custom properties for {self.props_sources(context)[-1].name}:")
         row = layout.split(factor=0.3)
         col1 = row.column()
         col2 = row.column()
 
-        items = [k for k in obj.keys() if k.startswith("3DMigoto:")]
-        items.sort()
+        props = self.props(context)
+        for key in sorted(props):
+            source = props[key]
+            icon = "OUTLINER_COLLECTION" if isinstance(source, bpy.types.Collection) else "NONE"
+            col1.label(text=key[len("3DMigoto:") :], icon=icon)
+            col2.prop(source, f'["{key}"]', text="")
 
-        for key in items:
-            col1.label(text=key[len("3DMigoto:") :])
-            col2.prop(obj, f'["{key}"]', text="")
+
+class XXMI_PT_Object_properties_tab(XXMI_PT_Object_properties, Panel):
+    """Object's properties Panel in Object tab"""
+
+    bl_space_type = "PROPERTIES"
+    bl_region_type = "WINDOW"
+    bl_context = "object"
+    bl_idname = "XXMI_PT_Object_props_tab"
+    bl_label = "XXMI Custom properties"
+
+    @staticmethod
+    def props_sources(context) -> list:
+        return [*context.object.users_collection, context.object] if context.object else []
+
+    @classmethod
+    def poll(cls, context):
+        return any(isinstance(s, bpy.types.Collection) for s in cls.props(context).values())
 
 
 # TODO:
