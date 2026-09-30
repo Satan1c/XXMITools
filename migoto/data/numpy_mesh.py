@@ -41,6 +41,10 @@ class NumpyMesh:
         deltas_path: Path | None = None,
         use_binary: bool = False,
     ) -> "NumpyMesh":
+        # Resolved before the .txt check: binary dumps ship only the deltas .buf
+        deltas_binary_path: Path | None = (
+            cls.resolve_binary_path(deltas_path) if use_binary else None
+        )
         if deltas_path is not None and not deltas_path.is_file():
             deltas_path = None
 
@@ -52,12 +56,10 @@ class NumpyMesh:
 
         vb_binary_path: Path | None = None
         ib_binary_path: Path | None = None
-        deltas_binary_path: Path | None = None
 
         if use_binary:
             vb_binary_path = cls.resolve_binary_path(vb_path, ".vb")
             ib_binary_path = cls.resolve_binary_path(ib_path, ".ib")
-            deltas_binary_path = cls.resolve_binary_path(deltas_path)
 
         if vb_binary_path is not None or ib_binary_path is not None:
             vb_bytes = None

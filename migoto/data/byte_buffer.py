@@ -887,6 +887,22 @@ class MigotoFormat:
                 # Read migoto format from fmt file
                 with open(fmt_path) as fmt_file:
                     fmt = MigotoFormat.from_files(fmt_file, None, None)
+                # Binary dumps carry the sk header in the .fmt and ship no deltas .txt,
+                # only the deltas .buf, whose layout is fixed (see expand_sk_bytes)
+                if (
+                    fmt.vb_layout is not None
+                    and fmt.sk_offsets is not None
+                    and fmt.sk_counts is not None
+                    and deltas_path is not None
+                    and deltas_path.with_suffix(".buf").is_file()
+                ):
+                    fmt.add_shapekey_elements(
+                        BufferSemantic(
+                            AbstractSemantic(Semantic.Position),
+                            DXGIFormat.R32G32B32_FLOAT,
+                        ),
+                        min(len(fmt.sk_offsets), len(fmt.sk_counts)),
+                    )
             else:
                 if ib_path is None or vb_path is None:
                     raise ValueError(
@@ -896,6 +912,17 @@ class MigotoFormat:
                     fmt = MigotoFormat.from_files(vb_file, ib_file, None)
 
         return fmt
+
+    def add_shapekey_elements(self, element_base: BufferSemantic, count: int) -> None:
+        assert self.vb_layout is not None
+        sk_offset = self.vb_layout.stride
+        for i in range(count):
+            new_element = copy.deepcopy(element_base)
+            new_element.abstract = AbstractSemantic(Semantic.ShapeKey, i)
+            new_element.offset = sk_offset
+            sk_offset += new_element.stride
+            self.vb_layout.add_element(new_element)
+        self.vb_layout.stride = sk_offset
 
     @classmethod
     def from_dict(cls, migoto_data: dict) -> "MigotoFormat":
@@ -1059,16 +1086,9 @@ class MigotoFormat:
                         f"Warning: sk offsets length {len(sk_offsets)} does not match sk counts length {len(sk_counts)}. Skipping shapekey elements import."
                     )
 
-                sk_offset = result.vb_layout.stride
-                for i in range(len(sk_counts)):
-                    new_element = copy.deepcopy(element_base)
-                    new_element.abstract = AbstractSemantic(Semantic.ShapeKey, i)
-                    new_element.offset = sk_offset
-                    sk_offset += new_element.stride
-                    result.vb_layout.add_element(new_element)
-                result.vb_layout.stride = sk_offset
                 result.sk_offsets = sk_offsets or None
                 result.sk_counts = sk_counts or None
+                result.add_shapekey_elements(element_base, len(sk_counts))
                 return result
             except ValueError as e:
                 print(e)
