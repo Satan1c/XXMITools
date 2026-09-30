@@ -200,9 +200,17 @@ class ObjectImporter:
             ib_path: Path = _extract_path(ib_path)
             fmt_path: Path = vb_path.with_suffix(".fmt")
 
-            basename: str = str(vb_path.stem).split("-")[0][:-1]
-            deltas_file: str = basename + "SKDeltas.txt"
-            deltas_path: Path = vb_path.parent / deltas_file
+            if part_format is not None:
+                # Per-component dumps: <Name>.fmt, <Name>-vb.buf, <Name>-ib.buf, <Name>-SKDeltas.buf
+                deltas_path: Path = vb_path.parent / (
+                    _component_name_from_paths(p) + "-SKDeltas.buf"
+                )
+                if deltas_path.is_file():
+                    part_format.add_binary_shapekey_elements()
+            else:
+                basename: str = str(vb_path.stem).split("-")[0][:-1]
+                deltas_file: str = basename + "SKDeltas.txt"
+                deltas_path: Path = vb_path.parent / deltas_file
 
             migoto_format: MigotoFormat = part_format or MigotoFormat.from_paths(
                 fmt_path, ib_path, vb_path, deltas_path

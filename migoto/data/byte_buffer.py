@@ -887,22 +887,9 @@ class MigotoFormat:
                 # Read migoto format from fmt file
                 with open(fmt_path) as fmt_file:
                     fmt = MigotoFormat.from_files(fmt_file, None, None)
-                # Binary dumps carry the sk header in the .fmt and ship no deltas .txt,
-                # only the deltas .buf, whose layout is fixed (see expand_sk_bytes)
-                if (
-                    fmt.vb_layout is not None
-                    and fmt.sk_offsets is not None
-                    and fmt.sk_counts is not None
-                    and deltas_path is not None
-                    and deltas_path.with_suffix(".buf").is_file()
-                ):
-                    fmt.add_shapekey_elements(
-                        BufferSemantic(
-                            AbstractSemantic(Semantic.Position),
-                            DXGIFormat.R32G32B32_FLOAT,
-                        ),
-                        min(len(fmt.sk_offsets), len(fmt.sk_counts)),
-                    )
+                # Binary dumps carry the sk header in the .fmt and ship no deltas .txt
+                if deltas_path is not None and deltas_path.with_suffix(".buf").is_file():
+                    fmt.add_binary_shapekey_elements()
             else:
                 if ib_path is None or vb_path is None:
                     raise ValueError(
@@ -923,6 +910,18 @@ class MigotoFormat:
             sk_offset += new_element.stride
             self.vb_layout.add_element(new_element)
         self.vb_layout.stride = sk_offset
+
+    def add_binary_shapekey_elements(self) -> None:
+        # Binary deltas have a fixed layout (see expand_sk_bytes), so the
+        # shapekey columns follow from the sk header alone
+        if self.vb_layout is None or self.sk_offsets is None or self.sk_counts is None:
+            return
+        self.add_shapekey_elements(
+            BufferSemantic(
+                AbstractSemantic(Semantic.Position), DXGIFormat.R32G32B32_FLOAT
+            ),
+            min(len(self.sk_offsets), len(self.sk_counts)),
+        )
 
     @classmethod
     def from_dict(cls, migoto_data: dict) -> "MigotoFormat":
