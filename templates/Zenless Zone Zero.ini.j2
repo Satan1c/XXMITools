@@ -43,7 +43,7 @@
         if DRAW_TYPE == 2 || DRAW_TYPE == 4
             vb1 = Resource{{component.fullname}}Texcoord
             vb2 = Resource{{component.fullname}}Blend
-            checktextureoverride = ib
+            CheckTextureOverride = ib
         elif DRAW_TYPE == 1
             {% if component.sk_deltas_count %}
                 Resource{{ component.fullname }}ShapeKeyResult = copy Resource{{ component.fullname }}Position
@@ -89,7 +89,7 @@
         {% if credit != "" %}
             $active = 1
         {% endif %}
-        checktextureoverride = ib
+        CheckTextureOverride = ib
     {% endfor %}
 {% endblock %}
 
@@ -117,7 +117,7 @@
                     ; {{ entry.collection_name }}
                 {% endif %}
                 ; {{ entry.name }} ({{ entry.vertex_count }})
-                drawindexed = {{ entry.index_count}}, {{ entry.index_offset }}, 0
+                DrawIndexed = {{ entry.index_count}}, {{ entry.index_offset }}, 0
             {% endfor %}
         {% endfor %}
     {% endfor %}
