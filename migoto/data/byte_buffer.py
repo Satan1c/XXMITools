@@ -887,9 +887,6 @@ class MigotoFormat:
                 # Read migoto format from fmt file
                 with open(fmt_path) as fmt_file:
                     fmt = MigotoFormat.from_files(fmt_file, None, None)
-                # Binary dumps carry the sk header in the .fmt and ship no deltas .txt
-                if deltas_path is not None and deltas_path.with_suffix(".buf").is_file():
-                    fmt.add_binary_shapekey_elements()
             else:
                 if ib_path is None or vb_path is None:
                     raise ValueError(
